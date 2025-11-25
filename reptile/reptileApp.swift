@@ -6,7 +6,7 @@
 //
 
 import SwiftUI
-
+import CameraKit
 @main
 struct reptileApp: App {
     var body: some Scene {
