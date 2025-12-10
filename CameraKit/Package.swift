@@ -21,7 +21,7 @@ let package = Package(
         .target(
             name: "CameraKit",
             dependencies: [],
-            path: "Sources/CameraKit"
+            path: "CameraKit"
         ),
         .testTarget(
             name: "CameraKitTests",

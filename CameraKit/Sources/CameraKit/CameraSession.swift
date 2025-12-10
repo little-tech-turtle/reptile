@@ -11,7 +11,7 @@ public final class CameraSession: NSObject {
     public override init() {
         super.init()
     }
-
+    // it's all fun and games until I try to do this
     public func requestPermission(completion: @escaping @Sendable (Bool) -> Void) {
         let status = AVCaptureDevice.authorizationStatus(for: .video)
         switch status {
