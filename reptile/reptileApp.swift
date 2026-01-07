@@ -11,7 +11,8 @@ import CameraKit
 struct reptileApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            LiveCameraView()
+                .ignoresSafeArea()
         }
     }
 }

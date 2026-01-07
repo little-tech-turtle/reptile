@@ -1,112 +1,105 @@
 import AVFoundation
-import SwiftUI
+import Foundation
+
+public enum CameraSessionError: Error {
+    case permissionDenied
+    case restricted
+    case configurationFailed
+    case noCameraAvailable
+}
 
 public final class CameraSession: NSObject {
-    public weak var delegate: CameraFrameDelegate?
+    public let session = AVCaptureSession()
 
-    private let captureSession = AVCaptureSession()
-    private let videoQueue = DispatchQueue(label: "com.camerakit.videoQueue")
-    private var videoOutput: AVCaptureVideoDataOutput!
+    private let sessionQueue = DispatchQueue(label: "camerakit.session.queue")
 
+    private var videoOutput: AVCaptureVideoDataOutput?
+    
+    public typealias FrameHandler = (CVPixelBuffer, CMTime) -> Void
+    private var frameHandler: FrameHandler?
+ 
     public override init() {
         super.init()
+        session.sessionPreset = .high
     }
-    // it's all fun and games until I try to do this
-    public func requestPermission(completion: @escaping @Sendable (Bool) -> Void) {
-        let status = AVCaptureDevice.authorizationStatus(for: .video)
-        switch status {
+
+    
+    public func startRunning(
+        completion: @escaping (Result<AVCaptureSession, CameraSessionError>) -> Void
+    ) {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
-            completion(true)
+            configureAndStart(completion: completion)
+
         case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .video) { granted in
-                DispatchQueue.main.async {
-                    completion(granted)
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                guard let self else { return }
+                if granted {
+                    self.configureAndStart(completion: completion)
+                } else {
+                    DispatchQueue.main.async {
+                        completion(.failure(.permissionDenied))
+                    }
                 }
             }
-        default:
-            completion(false)
+        case .denied:
+            completion(.failure(.permissionDenied))
+
+        case .restricted:
+            completion(.failure(.restricted))
+
+        @unknown default:
+            completion(.failure(.configurationFailed))
         }
     }
 
-    public func configureSession(position: AVCaptureDevice.Position = .front) throws {
-        captureSession.beginConfiguration()
-        defer {
-            captureSession.commitConfiguration()
+    public func stopRunning() {
+        sessionQueue.async { [weak self] in
+            self?.session.stopRunning()
         }
+    }
 
-        captureSession.sessionPreset = .high
+    private func configureAndStart(
+        completion: @escaping (Result<AVCaptureSession, CameraSessionError>) -> Void
+    ) {
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            do {
+                try self.configureSession()
+                self.session.startRunning()
+                DispatchQueue.main.async {
+                    completion(.success(self.session))
+                }
+            } catch let error as CameraSessionError {
+                DispatchQueue.main.async {
+                    completion(.failure(.configurationFailed))
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    completion(.failure(.configurationFailed))
+                }
+            }
+        }
+    }
+
+    private func configureSession() throws {
+        session.beginConfiguration()
+        session.inputs.forEach { session.removeInput($0) }
 
         guard
             let device = AVCaptureDevice.default(
-                .builtInWideAngleCamera,
-                for: .video,
-                position: position)
+                .builtInWideAngleCamera, for: .video, position: .back)
         else {
-            throw CameraSessionError.cameraUnavailable
+            session.commitConfiguration()
+            throw CameraSessionError.noCameraAvailable
         }
-
         let input = try AVCaptureDeviceInput(device: device)
 
-        if captureSession.canAddInput(input) {
-            captureSession.addInput(input)
-        } else {
-            throw CameraSessionError.cannotAddInput
+        guard session.canAddInput(input) else {
+            session.commitConfiguration()
+            throw CameraSessionError.configurationFailed
         }
-
-        let output = AVCaptureVideoDataOutput()
-        output.videoSettings = [
-            (kCVPixelBufferPixelFormatTypeKey as String): kCVPixelFormatType_32BGRA
-        ]
-        output.alwaysDiscardsLateVideoFrames = true
-        output.setSampleBufferDelegate(self, queue: videoQueue)
-        self.videoOutput = output
-
-        if captureSession.canAddOutput(output) {
-            captureSession.addOutput(output)
-        } else {
-            throw CameraSessionError.cannotAddOutput
-        }
-
-        if let connection = output.connection(with: .video) {
-            if #available(iOS 17.0, *) {
-                connection.videoRotationAngle = 90
-            }
-        }
-
+        session.addInput(input)
+        session.commitConfiguration()
     }
-
-    public func start() {
-        if !captureSession.isRunning {
-            videoQueue.async {
-                self.captureSession.startRunning()
-            }
-        }
-    }
-
-    public func stop() {
-        if captureSession.isRunning {
-            videoQueue.async {
-                self.captureSession.stopRunning()
-            }
-        }
-    }
-}
-
-extension CameraSession: AVCaptureVideoDataOutputSampleBufferDelegate {
-    public func captureOutput(
-        _ output: AVCaptureOutput,
-        didOutput sampleBuffer: CMSampleBuffer,
-        from connection: AVCaptureConnection
-    ) {
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-            return
-        }
-        delegate?.cameraSession(self, didOutputPixelBuffer: pixelBuffer)
-    }
-}
-
-public enum CameraSessionError: Error {
-    case cameraUnavailable
-    case cannotAddInput
-    case cannotAddOutput
 }
