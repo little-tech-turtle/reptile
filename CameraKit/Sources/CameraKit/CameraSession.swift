@@ -14,18 +14,24 @@ public final class CameraSession: NSObject {
     private let sessionQueue = DispatchQueue(label: "camerakit.session.queue")
 
     private var videoOutput: AVCaptureVideoDataOutput?
-    
-    public typealias FrameHandler = (CVPixelBuffer, CMTime) -> Void
+
+    public typealias FrameHandler = (CVPixelBuffer) -> Void
     private var frameHandler: FrameHandler?
- 
+
     public override init() {
         super.init()
         session.sessionPreset = .high
     }
 
-    
+    public func setFrameHandler(_ handler: FrameHandler?) {
+        sessionQueue.async { [weak self] in
+            self?.frameHandler = handler
+        }
+    }
+
     public func startRunning(
-        completion: @escaping (Result<AVCaptureSession, CameraSessionError>) -> Void
+        completion:
+            @escaping (Result<AVCaptureSession, CameraSessionError>) -> Void
     ) {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
@@ -60,7 +66,8 @@ public final class CameraSession: NSObject {
     }
 
     private func configureAndStart(
-        completion: @escaping (Result<AVCaptureSession, CameraSessionError>) -> Void
+        completion:
+            @escaping (Result<AVCaptureSession, CameraSessionError>) -> Void
     ) {
         sessionQueue.async { [weak self] in
             guard let self else { return }
@@ -84,11 +91,19 @@ public final class CameraSession: NSObject {
 
     private func configureSession() throws {
         session.beginConfiguration()
-        session.inputs.forEach { session.removeInput($0) }
+
+        let currentInputs = session.inputs
+        currentInputs.forEach { session.removeInput($0) }
+
+        let currentOutputs = session.outputs
+        currentOutputs.forEach { session.removeOutput($0) }
 
         guard
             let device = AVCaptureDevice.default(
-                .builtInWideAngleCamera, for: .video, position: .back)
+                .builtInWideAngleCamera,
+                for: .video,
+                position: .back
+            )
         else {
             session.commitConfiguration()
             throw CameraSessionError.noCameraAvailable
@@ -100,6 +115,38 @@ public final class CameraSession: NSObject {
             throw CameraSessionError.configurationFailed
         }
         session.addInput(input)
+
+        let output = AVCaptureVideoDataOutput()
+        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        
+        output.setSampleBufferDelegate(self, queue: sessionQueue)
+        if let connection = output.connection(with: .video) {
+            if connection.isVideoRotationAngleSupported(90){
+                connection.videoRotationAngle = 90
+            }
+        }
+        
+        guard session.canAddOutput(output) else {
+            session.commitConfiguration()
+            throw CameraSessionError.configurationFailed
+        }
+
+        session.addOutput(output)
+        videoOutput = output
+        
+        
+        
+
         session.commitConfiguration()
+    }
+}
+
+
+extension CameraSession: AVCaptureVideoDataOutputSampleBufferDelegate {
+    public func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        
+        print("frame captured")
+        frameHandler?(pixelBuffer)
     }
 }
