@@ -15,12 +15,12 @@ public final class CameraSession: NSObject {
 
     private var videoOutput: AVCaptureVideoDataOutput?
 
-    public typealias FrameHandler = (CVPixelBuffer) -> Void
+    public typealias FrameHandler = (CMSampleBuffer,AVCaptureConnection) -> Void
     private var frameHandler: FrameHandler?
 
     public override init() {
         super.init()
-        session.sessionPreset = .high
+        session.sessionPreset = .hd1280x720
     }
 
     public func setFrameHandler(_ handler: FrameHandler?) {
@@ -102,7 +102,7 @@ public final class CameraSession: NSObject {
             let device = AVCaptureDevice.default(
                 .builtInWideAngleCamera,
                 for: .video,
-                position: .back
+                position: .front
             )
         else {
             session.commitConfiguration()
@@ -117,12 +117,18 @@ public final class CameraSession: NSObject {
         session.addInput(input)
 
         let output = AVCaptureVideoDataOutput()
-        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        //output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange]
+        //output.alwaysDiscardsLateVideoFrames = true
         
         output.setSampleBufferDelegate(self, queue: sessionQueue)
         if let connection = output.connection(with: .video) {
-            if connection.isVideoRotationAngleSupported(90){
-                connection.videoRotationAngle = 90
+            if connection.isVideoRotationAngleSupported(0){
+                connection.videoRotationAngle = 0
+            }
+            if connection.isVideoMirroringSupported {
+                connection.automaticallyAdjustsVideoMirroring = false
+                connection.isVideoMirrored = false
             }
         }
         
@@ -144,9 +150,8 @@ public final class CameraSession: NSObject {
 
 extension CameraSession: AVCaptureVideoDataOutputSampleBufferDelegate {
     public func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         
         print("frame captured")
-        frameHandler?(pixelBuffer)
+        frameHandler?(sampleBuffer, connection)
     }
 }
