@@ -24,7 +24,7 @@ final class LiveCameraViewController: UIViewController {
 
     private let visionQueue = DispatchQueue(label: "vision.queue")
 
-    private var isProcessing = false
+    private let visionSemaphore = DispatchSemaphore(value: 1)
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -83,35 +83,31 @@ final class LiveCameraViewController: UIViewController {
     }
 
     private func handleFrame(_ sampleBuffer: CMSampleBuffer, connection: AVCaptureConnection) {
-        if isProcessing { return }
-        isProcessing = true
-
+        
+        guard visionSemaphore.wait(timeout: .now()) == .success else {return}
+        
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-            isProcessing = false
+            visionSemaphore.signal()
             return
         }
-        
         
         let orientation = cameraSession.visionOrientation()
 
         visionQueue.async { [weak self] in
-            defer { self?.isProcessing = false }
-            guard let self else { return }
+            guard let self else {
+                self?.visionSemaphore.signal()
+                return }
 
+            defer { self.visionSemaphore.signal()}
             autoreleasepool {
                 do {
-                    let req3D = VNDetectHumanBodyPose3DRequest()
-                    let handler = VNImageRequestHandler(
-                        cvPixelBuffer: pixelBuffer,
-                        orientation: orientation,
-                        options: [:]
-                    )
-                    try handler.perform([req3D])
-
-                    guard let obs = req3D.results?.first else { return }
-
+                    try self.sequenceHandler.perform([self.bodyPose3DRequest],on: pixelBuffer,orientation: orientation)
+                    guard let obs = self.bodyPose3DRequest.results?.first else {return}
+                    
+                    let joints = self.projectJointsToView(obs)
+                    
                     DispatchQueue.main.async {
-                        self.overlayView.joints = self.projectJointsToView(obs)
+                        self.overlayView.joints = joints
                     }
                 } catch {
                     let ns = error as NSError
@@ -131,38 +127,17 @@ final class LiveCameraViewController: UIViewController {
     ) -> [VNHumanBodyPose3DObservation.JointName: CGPoint] {
         var result: [VNHumanBodyPose3DObservation.JointName: CGPoint] = [:]
 
-        assert(Thread.isMainThread)
+        //assert(Thread.isMainThread)
 
         let previewLayer = previewView.videoPreviewLayer
         
-        let v = cameraSession.visionOrientation()
-        
-        print("UI:", 
-              "previewAngle:", previewView.videoPreviewLayer.connection?.videoRotationAngle ?? -1,
-              "visionOrientation:", visionOrientationString(v),
-        )
 
         for jointName in observation.availableJointNames {
             guard let point2D = try? observation.pointInImage(jointName) else {
                 continue
             }
-
-            //var captureDevicePoint = CGPoint(x:point2D.x , y: 1 - point2D.y)
-            // This is what we're trying to achieve with this transformation: CGPoint(x: 1 - point2D.y , y: point2D.x)
             let captureDevicePoint = CGPoint(x: 1 - point2D.y , y: 1 - point2D.x)
-            //let captureDevicePoint = CGPoint(x: -transformedCaptureDevicePoint.x, y:transformedCaptureDevicePoint.y)
-            //let transformation = CGAffineTransform( a:0, b:1, c:-1, d:0, tx:1, ty:0)
-            //let transformation = CGAffineTransform.identity.rotated(by: .pi)
-            //captureDevicePoint = captureDevicePoint.applying(transformation)
-            //TODO: Then we want to mirror this over the y axis or maybe we want to turn mirrored on? investigate tomorrow
-            
-            //let flipY = CGAffineTransform(scaleX: 1, y: -1)
-            //captureDevicePoint = captureDevicePoint.applying(flipY)
-           
-            print("captureDevicePoint: \(captureDevicePoint.x) , \(captureDevicePoint.y)")
             let layerPoint = previewLayer.layerPointConverted(fromCaptureDevicePoint: captureDevicePoint)
-            print("layer point ",layerPoint.debugDescription)
-           
             result[jointName] = layerPoint
         }
         return result
@@ -215,14 +190,8 @@ final class LiveCameraViewController: UIViewController {
             switch result {
             case .success(let session):
                 self.previewView.setSession(session)
-                guard
-                    let connection = self.previewView.videoPreviewLayer
-                        .connection
-                else { return }
                 self.updatePreviewOrientation()
-            
-
-                self.statusLabel.text = ""  // Hide text once running
+                self.statusLabel.text = ""
             case .failure(let error):
                 self.statusLabel.text =
                     "Camera error: \(errorMessage(for: error))"
