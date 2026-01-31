@@ -1,5 +1,7 @@
 import AVFoundation
 import Foundation
+import UIKit
+import ImageIO
 
 public enum CameraSessionError: Error {
     case permissionDenied
@@ -17,6 +19,10 @@ public final class CameraSession: NSObject {
 
     public typealias FrameHandler = (CMSampleBuffer,AVCaptureConnection) -> Void
     private var frameHandler: FrameHandler?
+    
+    public var interfaceOrientation: UIInterfaceOrientation = .portrait
+    public var mirrorVisionInput: Bool = false
+    public var cameraPosition: AVCaptureDevice.Position = .front
 
     public override init() {
         super.init()
@@ -88,6 +94,31 @@ public final class CameraSession: NSObject {
             }
         }
     }
+    
+
+    public func visionOrientation() -> CGImagePropertyOrientation {
+        // Front camera, unmirrored buffers (mirrorVisionInput = false)
+        let base: CGImagePropertyOrientation
+        switch interfaceOrientation {
+        case .portrait:            base = .right
+        case .portraitUpsideDown:  base = .left
+        case .landscapeLeft:       base = .up
+        case .landscapeRight:      base = .down
+        default:                   base = .right
+        }
+
+        guard mirrorVisionInput else { return base }
+
+        switch base {
+        case .up:    return .upMirrored
+        case .down:  return .downMirrored
+        case .left:  return .leftMirrored
+        case .right: return .rightMirrored
+        @unknown default: return base
+        }
+    }
+
+
 
     private func configureSession() throws {
         session.beginConfiguration()
@@ -122,15 +153,6 @@ public final class CameraSession: NSObject {
         //output.alwaysDiscardsLateVideoFrames = true
         
         output.setSampleBufferDelegate(self, queue: sessionQueue)
-        if let connection = output.connection(with: .video) {
-            if connection.isVideoRotationAngleSupported(0){
-                connection.videoRotationAngle = 0
-            }
-            if connection.isVideoMirroringSupported {
-                connection.automaticallyAdjustsVideoMirroring = false
-                connection.isVideoMirrored = false
-            }
-        }
         
         guard session.canAddOutput(output) else {
             session.commitConfiguration()
@@ -139,13 +161,10 @@ public final class CameraSession: NSObject {
 
         session.addOutput(output)
         videoOutput = output
-        
-        
-        
-
         session.commitConfiguration()
     }
 }
+
 
 
 extension CameraSession: AVCaptureVideoDataOutputSampleBufferDelegate {

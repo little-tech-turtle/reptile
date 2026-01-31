@@ -41,7 +41,11 @@ final class LiveCameraViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        previewView.frame = view.bounds
+        self.updatePreviewOrientation()
+        
+        if let io = view.window?.windowScene?.effectiveGeometry.interfaceOrientation {
+            cameraSession.interfaceOrientation = io
+        }
         statusLabel.frame = CGRect(
             x: 16,
             y: view.safeAreaInsets.top + 16,
@@ -87,7 +91,8 @@ final class LiveCameraViewController: UIViewController {
             return
         }
         
-        let orientation = visionOrientation(from: connection)
+        
+        let orientation = cameraSession.visionOrientation()
 
         visionQueue.async { [weak self] in
             defer { self?.isProcessing = false }
@@ -119,16 +124,6 @@ final class LiveCameraViewController: UIViewController {
         view.window?.windowScene?.effectiveGeometry.interfaceOrientation ?? .portrait
     }
     
-    private func visionOrientation(from connection: AVCaptureConnection) -> CGImagePropertyOrientation {
-    
-        switch currentInterfaceOrientation() {
-        case .portrait:            return .right
-        case .portraitUpsideDown:  return .left
-        case .landscapeLeft:       return .up       // home indicator on the right
-        case .landscapeRight:      return .down     // home indicator on the left
-        default:                   return .right
-        }
-    }
     
 
     private func projectJointsToView(
@@ -139,20 +134,54 @@ final class LiveCameraViewController: UIViewController {
         assert(Thread.isMainThread)
 
         let previewLayer = previewView.videoPreviewLayer
+        
+        let v = cameraSession.visionOrientation()
+        
+        print("UI:", 
+              "previewAngle:", previewView.videoPreviewLayer.connection?.videoRotationAngle ?? -1,
+              "visionOrientation:", visionOrientationString(v),
+        )
 
         for jointName in observation.availableJointNames {
             guard let point2D = try? observation.pointInImage(jointName) else {
                 continue
             }
 
-            let captureDevicePoint = CGPoint(x: point2D.x, y: 1.0 - point2D.y)
-            //let captureDevicePoint = CGPoint(x: point2D.x, y: point2D.y)
+            //var captureDevicePoint = CGPoint(x:point2D.x , y: 1 - point2D.y)
+            // This is what we're trying to achieve with this transformation: CGPoint(x: 1 - point2D.y , y: point2D.x)
+            let captureDevicePoint = CGPoint(x: 1 - point2D.y , y: 1 - point2D.x)
+            //let captureDevicePoint = CGPoint(x: -transformedCaptureDevicePoint.x, y:transformedCaptureDevicePoint.y)
+            //let transformation = CGAffineTransform( a:0, b:1, c:-1, d:0, tx:1, ty:0)
+            //let transformation = CGAffineTransform.identity.rotated(by: .pi)
+            //captureDevicePoint = captureDevicePoint.applying(transformation)
+            //TODO: Then we want to mirror this over the y axis or maybe we want to turn mirrored on? investigate tomorrow
+            
+            //let flipY = CGAffineTransform(scaleX: 1, y: -1)
+            //captureDevicePoint = captureDevicePoint.applying(flipY)
+           
+            print("captureDevicePoint: \(captureDevicePoint.x) , \(captureDevicePoint.y)")
             let layerPoint = previewLayer.layerPointConverted(fromCaptureDevicePoint: captureDevicePoint)
+            print("layer point ",layerPoint.debugDescription)
            
             result[jointName] = layerPoint
         }
         return result
     }
+    
+    private func visionOrientationString(_ o: CGImagePropertyOrientation) -> String {
+        switch o {
+        case .up: return "up"
+        case .down: return "down"
+        case .left: return "left"
+        case .right: return "right"
+        case .upMirrored: return "upMirrored"
+        case .downMirrored: return "downMirrored"
+        case .leftMirrored: return "leftMirrored"
+        case .rightMirrored: return "rightMirrored"
+        @unknown default: return "unknown"
+        }
+    }
+
 
     private func setupStatusLabel() {
         statusLabel.textColor = .white
@@ -190,13 +219,8 @@ final class LiveCameraViewController: UIViewController {
                     let connection = self.previewView.videoPreviewLayer
                         .connection
                 else { return }
-                if connection.isVideoRotationAngleSupported(90) {
-                    connection.videoRotationAngle = 90
-                }
-                if connection.isVideoMirroringSupported {
-                    connection.automaticallyAdjustsVideoMirroring = false
-                    connection.isVideoMirrored = true
-                }
+                self.updatePreviewOrientation()
+            
 
                 self.statusLabel.text = ""  // Hide text once running
             case .failure(let error):
@@ -205,6 +229,26 @@ final class LiveCameraViewController: UIViewController {
             }
         }
     }
+    
+    private func updatePreviewOrientation() {
+        guard let connection = previewView.videoPreviewLayer.connection else { return }
+
+        let io = view.window?.windowScene?.effectiveGeometry.interfaceOrientation ?? .portrait
+
+        let angle: CGFloat
+        switch io {
+        case .portrait:            angle = 90
+        case .portraitUpsideDown:  angle = 270
+        case .landscapeLeft:       angle = 0
+        case .landscapeRight:      angle = 180
+        default:                   angle = 90
+        }
+
+        if connection.isVideoRotationAngleSupported(angle) {
+            connection.videoRotationAngle = angle
+        }
+    }
+
 
     private func errorMessage(for error: CameraSessionError) -> String {
         switch error {
