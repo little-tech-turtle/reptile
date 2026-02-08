@@ -8,8 +8,8 @@
 import AVFoundation
 import CameraKit
 import UIKit
+import Combine
 import Vision
-
 final class LiveCameraViewController: UIViewController {
 
     private let cameraSession = CameraSession()
@@ -19,23 +19,32 @@ final class LiveCameraViewController: UIViewController {
     private let statusLabel = UILabel()
 
     private let overlayView = SkeletonOverlayView()
-    private let bodyPose3DRequest = VNDetectHumanBodyPose3DRequest()
-    private let sequenceHandler = VNSequenceRequestHandler()
-
-    private let visionQueue = DispatchQueue(label: "vision.queue")
-
-    private let visionSemaphore = DispatchSemaphore(value: 1)
-
+    
+    private let poseDetector = PoseDetectorPublisher()
+    private let projector = ScreenSpaceProjector()
+    private var cancellables = Set<AnyCancellable>()
+    
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .black
         setupPreviewView()
         setupOverlayView()
         setupStatusLabel()
-
-        cameraSession.setFrameHandler { [weak self] sampleBuffer, connection in
-            self?.handleFrame(sampleBuffer, connection:connection)
-        }
+        cameraSession.frames
+            .sink{[weak self] frame in
+                self?.poseDetector.ingest(frame)
+            }.store(in: &cancellables)
+        
+       
+        poseDetector.poses
+            .receive(on: RunLoop.main)
+            .sink { [weak self] poseFrame in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    let previewLayer = self.previewView.videoPreviewLayer
+                    let screenJoints = self.projector.project(normalized: poseFrame.joints, in: previewLayer)
+                    self.overlayView.joints = screenJoints
+                }
+            }.store(in: &cancellables)
         startCamera()
     }
 
@@ -44,7 +53,7 @@ final class LiveCameraViewController: UIViewController {
         self.updatePreviewOrientation()
         
         if let io = view.window?.windowScene?.effectiveGeometry.interfaceOrientation {
-            cameraSession.interfaceOrientation = io
+            cameraSession.setInterfaceOrientation(io)
         }
         statusLabel.frame = CGRect(
             x: 16,
@@ -82,66 +91,11 @@ final class LiveCameraViewController: UIViewController {
         ])
     }
 
-    private func handleFrame(_ sampleBuffer: CMSampleBuffer, connection: AVCaptureConnection) {
-        
-        guard visionSemaphore.wait(timeout: .now()) == .success else {return}
-        
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-            visionSemaphore.signal()
-            return
-        }
-        
-        let orientation = cameraSession.visionOrientation()
-
-        visionQueue.async { [weak self] in
-            guard let self else {
-                self?.visionSemaphore.signal()
-                return }
-
-            defer { self.visionSemaphore.signal()}
-            autoreleasepool {
-                do {
-                    try self.sequenceHandler.perform([self.bodyPose3DRequest],on: pixelBuffer,orientation: orientation)
-                    guard let obs = self.bodyPose3DRequest.results?.first else {return}
-                    
-                    let joints = self.projectJointsToView(obs)
-                    
-                    DispatchQueue.main.async {
-                        self.overlayView.joints = joints
-                    }
-                } catch {
-                    let ns = error as NSError
-                    print("Vision:", ns.domain, ns.code, ns.userInfo)
-                }
-            }
-        }
-    }
     private func currentInterfaceOrientation() -> UIInterfaceOrientation {
         view.window?.windowScene?.effectiveGeometry.interfaceOrientation ?? .portrait
     }
     
     
-
-    private func projectJointsToView(
-        _ observation: VNHumanBodyPose3DObservation
-    ) -> [VNHumanBodyPose3DObservation.JointName: CGPoint] {
-        var result: [VNHumanBodyPose3DObservation.JointName: CGPoint] = [:]
-
-        //assert(Thread.isMainThread)
-
-        let previewLayer = previewView.videoPreviewLayer
-        
-
-        for jointName in observation.availableJointNames {
-            guard let point2D = try? observation.pointInImage(jointName) else {
-                continue
-            }
-            let captureDevicePoint = CGPoint(x: 1 - point2D.y , y: 1 - point2D.x)
-            let layerPoint = previewLayer.layerPointConverted(fromCaptureDevicePoint: captureDevicePoint)
-            result[jointName] = layerPoint
-        }
-        return result
-    }
     
     private func visionOrientationString(_ o: CGImagePropertyOrientation) -> String {
         switch o {
@@ -233,6 +187,7 @@ final class LiveCameraViewController: UIViewController {
     }
 
     deinit {
+        poseDetector.finish()
         cameraSession.stopRunning()
     }
 }

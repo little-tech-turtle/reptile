@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import UIKit
 import ImageIO
+import Combine
 
 public enum CameraSessionError: Error {
     case permissionDenied
@@ -24,6 +25,12 @@ public final class CameraSession: NSObject {
     public var mirrorVisionInput: Bool = false
     public var cameraPosition: AVCaptureDevice.Position = .front
 
+    private let frameSubject = PassthroughSubject<CameraFrame, Never>()
+    
+    public var frames: AnyPublisher<CameraFrame, Never> {
+        frameSubject.eraseToAnyPublisher()
+    }
+    
     public override init() {
         super.init()
         session.sessionPreset = .hd1280x720
@@ -68,6 +75,7 @@ public final class CameraSession: NSObject {
     public func stopRunning() {
         sessionQueue.async { [weak self] in
             self?.session.stopRunning()
+            self?.frameSubject.send(completion: .finished)
         }
     }
 
@@ -163,6 +171,13 @@ public final class CameraSession: NSObject {
         videoOutput = output
         session.commitConfiguration()
     }
+    
+    public func setInterfaceOrientation(_ io:UIInterfaceOrientation){
+        sessionQueue.async{ [weak self] in self?.interfaceOrientation = io}
+    }
+    public func setMirrorInput(_ isMirrored:Bool){
+        sessionQueue.async{ [weak self] in self?.mirrorVisionInput = isMirrored}
+    }
 }
 
 
@@ -170,7 +185,7 @@ public final class CameraSession: NSObject {
 extension CameraSession: AVCaptureVideoDataOutputSampleBufferDelegate {
     public func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         
-        print("frame captured")
-        frameHandler?(sampleBuffer, connection)
+        let frame = CameraFrame(sampleBuffer: sampleBuffer, connection: connection, visionOrientation: visionOrientation())
+        frameSubject.send(frame)
     }
 }
