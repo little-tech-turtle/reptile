@@ -8,6 +8,9 @@
 import Vision
 import AVFoundation
 import Combine
+import OSLog
+
+private let logger = Logger(subsystem: "CameraKit", category: "poseDetection")
 
 public final class PoseDetectorPublisher{
     private let request = VNDetectHumanBodyPose3DRequest()
@@ -46,7 +49,7 @@ public final class PoseDetectorPublisher{
                     self.subject.send(PoseFrame(timestamp:timeStamp,joints:joints))
                     
                 } catch {
-                    print ("Vision error:", error)
+                    logger.error("Vision request failed: \(error.localizedDescription)")
                 }
             }
             

@@ -1,6 +1,9 @@
 import Foundation
 import Combine
 import CoreMedia
+import OSLog
+
+private let logger = Logger(subsystem: "CameraKit", category: "repCounting")
 
 /// Quality of pose detection for rep counting
 public enum DetectionQuality: Sendable {
@@ -38,6 +41,7 @@ public final class RepCounterPublisher {
     private var metricCalculator: any MetricCalculator
     private var peakDetector: any PeakDetector
     private var repCounter: any RepCounter
+    private var metricFilter: (any MetricFilter)?
 
     public var repCounts: AnyPublisher<RepCounterOutput, Never> {
         subject.eraseToAnyPublisher()
@@ -46,11 +50,13 @@ public final class RepCounterPublisher {
     public init(
         metricCalculator: any MetricCalculator = DistanceFromFloorCalculator(),
         peakDetector: any PeakDetector = LocalExtremaPeakDetector(),
-        repCounter: any RepCounter = CycleBasedRepCounter()
+        repCounter: any RepCounter = CycleBasedRepCounter(),
+        metricFilter: (any MetricFilter)? = EMAMetricFilter()
     ) {
         self.metricCalculator = metricCalculator
         self.peakDetector = peakDetector
         self.repCounter = repCounter
+        self.metricFilter = metricFilter
     }
 
     public func ingest(_ poseFrame: PoseFrame) {
@@ -59,16 +65,23 @@ public final class RepCounterPublisher {
             return
         }
 
-        let sample = MetricSample(timestamp: poseFrame.timestamp, value: metric)
+        let filteredMetric = metricFilter?.filter(metric) ?? metric
+        logger.debug("metric=\(filteredMetric, format: .fixed(precision: 3))")
 
+        let sample = MetricSample(timestamp: poseFrame.timestamp, value: filteredMetric)
+
+        let previousCount = repCounter.count
         if let peak = peakDetector.ingest(sample) {
-            repCounter.processPeak(peak, timestamp: poseFrame.timestamp, metricValue: metric)
+            repCounter.processPeak(peak, timestamp: poseFrame.timestamp, metricValue: filteredMetric)
+        }
+        if repCounter.count != previousCount {
+            logger.info("Rep counted — total=\(self.repCounter.count) state=\(self.repCounter.state.rawValue)")
         }
 
         let quality: DetectionQuality = poseFrame.joints.count >= 10 ? .good :
                                         poseFrame.joints.count >= 5 ? .partial : .poor
 
-        sendOutput(poseFrame: poseFrame, metric: metric, quality: quality)
+        sendOutput(poseFrame: poseFrame, metric: filteredMetric, quality: quality)
     }
 
     private func sendOutput(poseFrame: PoseFrame, metric: CGFloat?, quality: DetectionQuality) {
