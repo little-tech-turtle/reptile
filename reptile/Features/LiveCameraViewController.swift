@@ -22,6 +22,7 @@ final class LiveCameraViewController: UIViewController {
     
     private let poseDetector = PoseDetectorPublisher()
     private let projector = ScreenSpaceProjector()
+    private let repCounter = RepCounterPublisher()
     private var cancellables = Set<AnyCancellable>()
     
     override func viewDidLoad() {
@@ -30,19 +31,36 @@ final class LiveCameraViewController: UIViewController {
         setupOverlayView()
         setupStatusLabel()
         cameraSession.frames
-            .sink{[weak self] frame in
+            .sink { [weak self] frame in
                 self?.poseDetector.ingest(frame)
             }.store(in: &cancellables)
-        
-       
+
         poseDetector.poses
-            .receive(on: RunLoop.main)
             .sink { [weak self] poseFrame in
+                self?.repCounter.ingest(poseFrame)
+            }.store(in: &cancellables)
+
+        repCounter.repCounts
+            .receive(on: RunLoop.main)
+            .sink { [weak self] output in
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     let previewLayer = self.previewView.videoPreviewLayer
-                    let screenJoints = self.projector.project(normalized: poseFrame.joints, in: previewLayer)
+                    let screenJoints = self.projector.project(
+                        normalized: output.poseFrame.joints,
+                        in: previewLayer
+                    )
                     self.overlayView.joints = screenJoints
+
+                    // Update status label with rep count and state
+                    let qualityIndicator: String
+                    switch output.detectionQuality {
+                    case .good: qualityIndicator = "●"
+                    case .partial: qualityIndicator = "◐"
+                    case .poor: qualityIndicator = "○"
+                    }
+
+                    self.statusLabel.text = "Reps: \(output.repCount) • State: \(output.state.rawValue) • \(qualityIndicator)"
                 }
             }.store(in: &cancellables)
         startCamera()
