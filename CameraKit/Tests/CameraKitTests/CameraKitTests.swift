@@ -2,6 +2,14 @@ import Testing
 import CoreMedia
 @testable import CameraKit
 
+#if canImport(UIKit)
+import UIKit
+#endif
+
+#if canImport(AVFoundation)
+import AVFoundation
+#endif
+
 // MARK: - Helpers
 
 private func makeSample(_ value: CGFloat, seconds: Double = 0) -> MetricSample {
@@ -168,6 +176,59 @@ private func time(_ seconds: Double) -> CMTime {
     #expect(counter.count == 0)
 }
 
+@Test func repCounter_manyMaximaFollowedByMinimumCountsOne() {
+    // Simulates the arming-broadcast pattern: publisher fires .maximum every frame
+    // while the person is standing (above threshold). A single .minimum should
+    // still count exactly one rep. The minimum is placed 1 second after the last
+    // maximum so the time gate (default 0.5 s) is satisfied.
+    var counter = makeCounter()
+    for i in 0 ..< 10 {
+        counter.processPeak(.maximum, timestamp: time(Double(i) * 0.033), metricValue: 0.9)
+    }
+    counter.processPeak(.minimum, timestamp: time(1.0), metricValue: 0.1)
+    #expect(counter.count == 1)
+}
+
+// MARK: - SpikeRejectionFilter
+
+@Test func spikeFilter_normalValuesPassThrough() {
+    var filter = SpikeRejectionFilter(maxDelta: 0.25)
+    let values: [CGFloat] = [0.5, 0.55, 0.6, 0.58, 0.62]
+    var results: [CGFloat] = []
+    for v in values { results.append(filter.filter(v)) }
+    #expect(results == values)
+}
+
+@Test func spikeFilter_spikeIsRejectedAndHeld() {
+    var filter = SpikeRejectionFilter(maxDelta: 0.25)
+    _ = filter.filter(0.5)         // lastAccepted = 0.5
+    let held = filter.filter(0.0)  // delta 0.5 > 0.25 — should return 0.5
+    #expect(held == 0.5)
+    // Next normal value should resume from 0.5 (not from 0.0)
+    let next = filter.filter(0.6)  // delta 0.1 from 0.5 — should pass
+    #expect(next == 0.6)
+}
+
+@Test func spikeFilter_nanIsRejected() {
+    var filter = SpikeRejectionFilter(maxDelta: 0.25)
+    _ = filter.filter(0.5)
+    let result = filter.filter(.nan)
+    #expect(result == 0.5)
+}
+
+@Test func spikeFilter_infinityIsRejected() {
+    var filter = SpikeRejectionFilter(maxDelta: 0.25)
+    _ = filter.filter(0.5)
+    let result = filter.filter(.infinity)
+    #expect(result == 0.5)
+}
+
+@Test func spikeFilter_firstValueAlwaysPasses() {
+    var filter = SpikeRejectionFilter(maxDelta: 0.25)
+    let result = filter.filter(0.99)
+    #expect(result == 0.99)
+}
+
 // MARK: - EMAMetricFilter
 
 @Test func emaFilter_firstSamplePassesThrough() {
@@ -191,3 +252,41 @@ private func time(_ seconds: Double) -> CMTime {
     }
     #expect(abs(result - 1.0) < 0.001)
 }
+
+// MARK: - FrameTransformPolicy
+
+#if canImport(UIKit)
+@Test func transformPolicy_visionOrientationPortraitUnmirrored() {
+    let result = FrameTransformPolicy.visionOrientation(for: .portrait, mirrored: false)
+    #expect(result == .right)
+}
+
+@Test func transformPolicy_visionOrientationLandscapeRightMirrored() {
+    let result = FrameTransformPolicy.visionOrientation(for: .landscapeRight, mirrored: true)
+    #expect(result == .downMirrored)
+}
+
+@Test func transformPolicy_previewRotationAngles() {
+    #expect(FrameTransformPolicy.previewRotationAngle(for: .portrait) == 90)
+    #expect(FrameTransformPolicy.previewRotationAngle(for: .portraitUpsideDown) == 270)
+    #expect(FrameTransformPolicy.previewRotationAngle(for: .landscapeLeft) == 0)
+    #expect(FrameTransformPolicy.previewRotationAngle(for: .landscapeRight) == 180)
+}
+#endif
+
+// MARK: - LivePipeline API
+
+#if canImport(UIKit) && canImport(AVFoundation)
+@Test func livePipeline_exposesInjectedCaptureSession() {
+    let session = CameraSession()
+    let pipeline = LivePipeline(cameraSession: session)
+
+    #expect(pipeline.captureSession === session.session)
+}
+
+@Test func startAPIs_areParameterless() {
+    let _: (CameraSession) -> () -> Void = CameraSession.startRunning
+    let _: (LivePipeline) -> () -> Void = LivePipeline.start
+    #expect(Bool(true))
+}
+#endif

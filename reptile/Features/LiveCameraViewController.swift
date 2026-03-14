@@ -5,80 +5,39 @@
 //  Created by TechTurtle on 04/01/2026.
 //
 
-import AVFoundation
 import CameraKit
 import UIKit
-import Combine
-import Vision
+
 final class LiveCameraViewController: UIViewController {
-
-    private let cameraSession = CameraSession()
-
     private let previewView = CameraPreviewView()
-
     private let statusLabel = UILabel()
-
     private let overlayView = SkeletonOverlayView()
-    
-    private let poseDetector = PoseDetectorPublisher()
-    private let projector = ScreenSpaceProjector()
-    private let repCounter = RepCounterPublisher()
-    private var cancellables = Set<AnyCancellable>()
-    
+    private let debugView = DebugOverlayView()
+
+    private let coordinator = LiveCameraCoordinator()
+
     override func viewDidLoad() {
         super.viewDidLoad()
+        view.backgroundColor = .black
+
         setupPreviewView()
         setupOverlayView()
         setupStatusLabel()
-        cameraSession.frames
-            .sink { [weak self] frame in
-                self?.poseDetector.ingest(frame)
-            }.store(in: &cancellables)
+        setupDebugView()
 
-        poseDetector.poses
-            .sink { [weak self] poseFrame in
-                self?.repCounter.ingest(poseFrame)
-            }.store(in: &cancellables)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(toggleDebug))
+        view.addGestureRecognizer(tap)
 
-        repCounter.repCounts
-            .receive(on: RunLoop.main)
-            .sink { [weak self] output in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    let previewLayer = self.previewView.videoPreviewLayer
-                    let screenJoints = self.projector.project(
-                        normalized: output.poseFrame.joints,
-                        in: previewLayer
-                    )
-                    self.overlayView.joints = screenJoints
-
-                    // Update status label with rep count and state
-                    let qualityIndicator: String
-                    switch output.detectionQuality {
-                    case .good: qualityIndicator = "●"
-                    case .partial: qualityIndicator = "◐"
-                    case .poor: qualityIndicator = "○"
-                    }
-
-                    self.statusLabel.text = "Reps: \(output.repCount) • State: \(output.state.rawValue) • \(qualityIndicator)"
-                }
-            }.store(in: &cancellables)
-        startCamera()
+        coordinator.bind(previewView: previewView) { [weak self] model in
+            guard let self else { return }
+            self.render(model)
+        }
+        coordinator.start()
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        self.updatePreviewOrientation()
-        
-        if let io = view.window?.windowScene?.effectiveGeometry.interfaceOrientation {
-            cameraSession.setInterfaceOrientation(io)
-        }
-        statusLabel.frame = CGRect(
-            x: 16,
-            y: view.safeAreaInsets.top + 16,
-            width: view.bounds.width - 32,
-            height: 40
-        )
+        coordinator.updateInterfaceOrientation(currentInterfaceOrientation())
     }
 
     private func setupPreviewView() {
@@ -91,12 +50,10 @@ final class LiveCameraViewController: UIViewController {
             previewView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             previewView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
-        view.bringSubviewToFront(overlayView)
     }
 
     private func setupOverlayView() {
-        //overlayView.backgroundColor = .clear
-        overlayView.backgroundColor = UIColor.red.withAlphaComponent(0.2)
+        overlayView.backgroundColor = .clear
         overlayView.isUserInteractionEnabled = false
         overlayView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(overlayView)
@@ -107,36 +64,19 @@ final class LiveCameraViewController: UIViewController {
             overlayView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             overlayView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
-    }
 
-    private func currentInterfaceOrientation() -> UIInterfaceOrientation {
-        view.window?.windowScene?.effectiveGeometry.interfaceOrientation ?? .portrait
+        view.bringSubviewToFront(overlayView)
     }
-    
-    
-    
-    private func visionOrientationString(_ o: CGImagePropertyOrientation) -> String {
-        switch o {
-        case .up: return "up"
-        case .down: return "down"
-        case .left: return "left"
-        case .right: return "right"
-        case .upMirrored: return "upMirrored"
-        case .downMirrored: return "downMirrored"
-        case .leftMirrored: return "leftMirrored"
-        case .rightMirrored: return "rightMirrored"
-        @unknown default: return "unknown"
-        }
-    }
-
 
     private func setupStatusLabel() {
         statusLabel.textColor = .white
         statusLabel.font = .systemFont(ofSize: 14, weight: .medium)
         statusLabel.textAlignment = .center
-        statusLabel.numberOfLines = 1000
+        statusLabel.numberOfLines = 2
         statusLabel.text = "Starting camera…"
         statusLabel.backgroundColor = UIColor.black.withAlphaComponent(0.4)
+        statusLabel.layer.cornerRadius = 10
+        statusLabel.layer.masksToBounds = true
 
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(statusLabel)
@@ -146,66 +86,46 @@ final class LiveCameraViewController: UIViewController {
                 equalTo: view.safeAreaLayoutGuide.topAnchor,
                 constant: 8
             ),
-            statusLabel.bottomAnchor.constraint(
-                equalTo: view.safeAreaLayoutGuide.bottomAnchor,
-                constant: -8
-            ),
+            statusLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            statusLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            statusLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 36),
         ])
+
+        view.bringSubviewToFront(statusLabel)
     }
 
-    private func startCamera() {
-        cameraSession.startRunning {
-            [weak self] (result: Result<AVCaptureSession, CameraSessionError>)
-            in
-            guard let self else { return }
+    private func setupDebugView() {
+        debugView.isHidden = true
+        debugView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(debugView)
 
-            switch result {
-            case .success(let session):
-                self.previewView.setSession(session)
-                self.updatePreviewOrientation()
-                self.statusLabel.text = ""
-            case .failure(let error):
-                self.statusLabel.text =
-                    "Camera error: \(errorMessage(for: error))"
-            }
-        }
-    }
-    
-    private func updatePreviewOrientation() {
-        guard let connection = previewView.videoPreviewLayer.connection else { return }
+        NSLayoutConstraint.activate([
+            debugView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            debugView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            debugView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            debugView.heightAnchor.constraint(equalToConstant: 200),
+        ])
 
-        let io = view.window?.windowScene?.effectiveGeometry.interfaceOrientation ?? .portrait
-
-        let angle: CGFloat
-        switch io {
-        case .portrait:            angle = 90
-        case .portraitUpsideDown:  angle = 270
-        case .landscapeLeft:       angle = 0
-        case .landscapeRight:      angle = 180
-        default:                   angle = 90
-        }
-
-        if connection.isVideoRotationAngleSupported(angle) {
-            connection.videoRotationAngle = angle
-        }
+        view.bringSubviewToFront(debugView)
     }
 
-
-    private func errorMessage(for error: CameraSessionError) -> String {
-        switch error {
-        case .permissionDenied:
-            return "Permission denied. Enable camera in Settings."
-        case .restricted:
-            return "Camera restricted on this device."
-        case .noCameraAvailable:
-            return "No camera available."
-        case .configurationFailed:
-            return "Could not configure camera."
-        }
+    @objc private func toggleDebug() {
+        debugView.isHidden.toggle()
     }
 
-    deinit {
-        poseDetector.finish()
-        cameraSession.stopRunning()
+    private func currentInterfaceOrientation() -> UIInterfaceOrientation {
+        if let io = view.window?.windowScene?.effectiveGeometry.interfaceOrientation {
+            return io
+        }
+        return .portrait
+    }
+
+    private func render(_ model: LiveCameraRenderModel) {
+        overlayView.joints = model.joints
+        statusLabel.text = model.statusText
+
+        if let output = model.output {
+            debugView.update(output: output)
+        }
     }
 }

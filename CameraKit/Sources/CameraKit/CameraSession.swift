@@ -1,14 +1,22 @@
 import AVFoundation
-import Foundation
-import UIKit
-import ImageIO
 import Combine
+import Foundation
+import ImageIO
+import UIKit
 
-public enum CameraSessionError: Error {
+public enum CameraSessionError: Error, Sendable {
     case permissionDenied
     case restricted
     case configurationFailed
     case noCameraAvailable
+}
+
+public enum CameraSessionState: Sendable {
+    case idle
+    case starting
+    case running
+    case stopping
+    case failed(CameraSessionError)
 }
 
 public final class CameraSession: NSObject {
@@ -16,114 +24,94 @@ public final class CameraSession: NSObject {
 
     private let sessionQueue = DispatchQueue(label: "camerakit.session.queue")
 
-    private var videoOutput: AVCaptureVideoDataOutput?
-
-    public typealias FrameHandler = (CMSampleBuffer,AVCaptureConnection) -> Void
-    private var frameHandler: FrameHandler?
-    
     public var interfaceOrientation: UIInterfaceOrientation = .portrait
     public var mirrorVisionInput: Bool = false
     public var cameraPosition: AVCaptureDevice.Position = .front
 
     private let frameSubject = PassthroughSubject<CameraFrame, Never>()
-    
+    private let stateSubject = CurrentValueSubject<CameraSessionState, Never>(.idle)
+
     public var frames: AnyPublisher<CameraFrame, Never> {
         frameSubject.eraseToAnyPublisher()
     }
-    
+
+    public var states: AnyPublisher<CameraSessionState, Never> {
+        stateSubject.eraseToAnyPublisher()
+    }
+
     public override init() {
         super.init()
         session.sessionPreset = .hd1280x720
     }
 
-    public func setFrameHandler(_ handler: FrameHandler?) {
-        sessionQueue.async { [weak self] in
-            self?.frameHandler = handler
-        }
-    }
+    public func startRunning() {
+        publishState(.starting)
 
-    public func startRunning(
-        completion:
-            @escaping (Result<AVCaptureSession, CameraSessionError>) -> Void
-    ) {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
-            configureAndStart(completion: completion)
+            configureAndStart()
 
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
                 guard let self else { return }
                 if granted {
-                    self.configureAndStart(completion: completion)
+                    self.configureAndStart()
                 } else {
-                    DispatchQueue.main.async {
-                        completion(.failure(.permissionDenied))
-                    }
+                    self.publishState(.failed(.permissionDenied))
                 }
             }
         case .denied:
-            completion(.failure(.permissionDenied))
+            publishState(.failed(.permissionDenied))
 
         case .restricted:
-            completion(.failure(.restricted))
+            publishState(.failed(.restricted))
 
         @unknown default:
-            completion(.failure(.configurationFailed))
+            publishState(.failed(.configurationFailed))
         }
     }
 
     public func stopRunning() {
+        publishState(.stopping)
+
         sessionQueue.async { [weak self] in
-            self?.session.stopRunning()
-            self?.frameSubject.send(completion: .finished)
+            guard let self else { return }
+
+            if self.session.isRunning {
+                self.session.stopRunning()
+            }
+
+            self.publishState(.idle)
         }
     }
 
-    private func configureAndStart(
-        completion:
-            @escaping (Result<AVCaptureSession, CameraSessionError>) -> Void
-    ) {
+    private func configureAndStart() {
         sessionQueue.async { [weak self] in
             guard let self else { return }
+
+            if self.session.isRunning {
+                self.publishState(.running)
+                return
+            }
+
             do {
                 try self.configureSession()
                 self.session.startRunning()
-                DispatchQueue.main.async {
-                    completion(.success(self.session))
-                }
+                self.publishState(.running)
             } catch let error as CameraSessionError {
-                DispatchQueue.main.async {
-                    completion(.failure(.configurationFailed))
-                }
+                self.publishState(.failed(error))
             } catch {
-                DispatchQueue.main.async {
-                    completion(.failure(.configurationFailed))
-                }
+                self.publishState(.failed(.configurationFailed))
             }
         }
     }
-    
+
 
     public func visionOrientation() -> CGImagePropertyOrientation {
-        // Front camera, unmirrored buffers (mirrorVisionInput = false)
-        let base: CGImagePropertyOrientation
-        switch interfaceOrientation {
-        case .portrait:            base = .right
-        case .portraitUpsideDown:  base = .left
-        case .landscapeLeft:       base = .up
-        case .landscapeRight:      base = .down
-        default:                   base = .right
-        }
-
-        guard mirrorVisionInput else { return base }
-
-        switch base {
-        case .up:    return .upMirrored
-        case .down:  return .downMirrored
-        case .left:  return .leftMirrored
-        case .right: return .rightMirrored
-        @unknown default: return base
-        }
+        FrameTransformPolicy.visionOrientation(
+            for: interfaceOrientation,
+            mirrored: mirrorVisionInput
+        )
     }
 
 
@@ -141,7 +129,7 @@ public final class CameraSession: NSObject {
             let device = AVCaptureDevice.default(
                 .builtInWideAngleCamera,
                 for: .video,
-                position: .front
+                position: cameraPosition
             )
         else {
             session.commitConfiguration()
@@ -168,24 +156,46 @@ public final class CameraSession: NSObject {
         }
 
         session.addOutput(output)
-        videoOutput = output
         session.commitConfiguration()
     }
-    
-    public func setInterfaceOrientation(_ io:UIInterfaceOrientation){
-        sessionQueue.async{ [weak self] in self?.interfaceOrientation = io}
+
+    public func setInterfaceOrientation(_ io: UIInterfaceOrientation) {
+        sessionQueue.async { [weak self] in
+            self?.interfaceOrientation = io
+        }
     }
-    public func setMirrorInput(_ isMirrored:Bool){
-        sessionQueue.async{ [weak self] in self?.mirrorVisionInput = isMirrored}
+
+    public func setMirrorInput(_ isMirrored: Bool) {
+        sessionQueue.async { [weak self] in
+            self?.mirrorVisionInput = isMirrored
+        }
+    }
+
+    public func setCameraPosition(_ position: AVCaptureDevice.Position) {
+        sessionQueue.async { [weak self] in
+            self?.cameraPosition = position
+        }
+    }
+
+    private func publishState(_ state: CameraSessionState) {
+        sessionQueue.async { [weak self] in
+            self?.stateSubject.send(state)
+        }
     }
 }
 
 
 
 extension CameraSession: AVCaptureVideoDataOutputSampleBufferDelegate {
-    public func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        
-        let frame = CameraFrame(sampleBuffer: sampleBuffer, connection: connection, visionOrientation: visionOrientation())
+    public func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from _: AVCaptureConnection
+    ) {
+        let frame = CameraFrame(
+            sampleBuffer: sampleBuffer,
+            visionOrientation: visionOrientation()
+        )
         frameSubject.send(frame)
     }
 }

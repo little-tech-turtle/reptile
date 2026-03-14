@@ -10,6 +10,13 @@ import ImageIO
 
 public struct CameraFrame {
     public let sampleBuffer: CMSampleBuffer
-    public let connection: AVCaptureConnection
     public let visionOrientation: CGImagePropertyOrientation
+
+    public init(
+        sampleBuffer: CMSampleBuffer,
+        visionOrientation: CGImagePropertyOrientation
+    ) {
+        self.sampleBuffer = sampleBuffer
+        self.visionOrientation = visionOrientation
+    }
 }

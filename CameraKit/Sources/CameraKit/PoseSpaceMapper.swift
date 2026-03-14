@@ -31,7 +31,9 @@ public enum PoseSpaceMapper {
 
         for joint in obs.availableJointNames {
             guard let p = try? obs.pointInImage(joint) else { continue }
-            out[joint] = normalizedPosePoint(from: p.location)
+            let np = normalizedPosePoint(from: p.location)
+            guard (0...1).contains(np.x) && (0...1).contains(np.y) else { continue }
+            out[joint] = np
         }
         return out
     }
