@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import CoreMedia
 import OSLog
+import Vision
 
 private let logger = Logger(subsystem: "CameraKit", category: "repCounting")
 
@@ -12,6 +13,52 @@ public enum DetectionQuality: Sendable {
     case poor    // Very few joints visible
 }
 
+public struct RepCountingConfiguration: Sendable {
+    public var armingThreshold: CGFloat
+    public var peakHistoryCapacity: Int
+    public var minPeakHeight: CGFloat
+    public var minValleyDepth: CGFloat
+    public var peakWindowSize: Int
+    public var minTimeBetweenReps: Double
+    public var minAmplitude: CGFloat
+    public var upThreshold: CGFloat
+    public var downThreshold: CGFloat
+    public var inactivityResetSeconds: Double
+    public var activityDeltaThreshold: CGFloat
+    public var spikeMaxDelta: CGFloat
+    public var emaAlpha: CGFloat
+
+    public init(
+        armingThreshold: CGFloat = 0.5,
+        peakHistoryCapacity: Int = 90,
+        minPeakHeight: CGFloat = 0.08,
+        minValleyDepth: CGFloat = 0.08,
+        peakWindowSize: Int = 5,
+        minTimeBetweenReps: Double = 0.5,
+        minAmplitude: CGFloat = 0.15,
+        upThreshold: CGFloat = 0.6,
+        downThreshold: CGFloat = 0.3,
+        inactivityResetSeconds: Double = 3.0,
+        activityDeltaThreshold: CGFloat = 0.015,
+        spikeMaxDelta: CGFloat = 0.25,
+        emaAlpha: CGFloat = 0.3
+    ) {
+        self.armingThreshold = armingThreshold
+        self.peakHistoryCapacity = peakHistoryCapacity
+        self.minPeakHeight = minPeakHeight
+        self.minValleyDepth = minValleyDepth
+        self.peakWindowSize = peakWindowSize
+        self.minTimeBetweenReps = minTimeBetweenReps
+        self.minAmplitude = minAmplitude
+        self.upThreshold = upThreshold
+        self.downThreshold = downThreshold
+        self.inactivityResetSeconds = inactivityResetSeconds
+        self.activityDeltaThreshold = activityDeltaThreshold
+        self.spikeMaxDelta = spikeMaxDelta
+        self.emaAlpha = emaAlpha
+    }
+}
+
 /// Output from rep counter including pose and rep count
 public struct RepCounterOutput: Sendable {
     public let poseFrame: PoseFrame
@@ -20,6 +67,7 @@ public struct RepCounterOutput: Sendable {
     public let state: RepCounterState
     public let detectionQuality: DetectionQuality
     public let runningMax: CGFloat
+    public let trackedJoints: [VNHumanBodyPose3DObservation.JointName]
 
     public init(
         poseFrame: PoseFrame,
@@ -27,7 +75,8 @@ public struct RepCounterOutput: Sendable {
         currentMetric: CGFloat?,
         state: RepCounterState,
         detectionQuality: DetectionQuality,
-        runningMax: CGFloat = 0
+        runningMax: CGFloat = 0,
+        trackedJoints: [VNHumanBodyPose3DObservation.JointName] = []
     ) {
         self.poseFrame = poseFrame
         self.repCount = repCount
@@ -35,6 +84,7 @@ public struct RepCounterOutput: Sendable {
         self.state = state
         self.detectionQuality = detectionQuality
         self.runningMax = runningMax
+        self.trackedJoints = trackedJoints
     }
 }
 
@@ -56,7 +106,7 @@ public final class RepCounterPublisher {
     }
 
     public init(
-        metricCalculator: any MetricCalculator = DistanceFromFloorCalculator(),
+        metricCalculator: any MetricCalculator = AdaptiveDominantAxisCalculator(),
         peakDetector: any PeakDetector = LocalExtremaPeakDetector(),
         repCounter: any RepCounter = CycleBasedRepCounter(),
         metricFilters: [any MetricFilter] = [SpikeRejectionFilter(), EMAMetricFilter()],
@@ -69,6 +119,34 @@ public final class RepCounterPublisher {
         self.armingThreshold = armingThreshold
     }
 
+    public convenience init(
+        configuration: RepCountingConfiguration,
+        metricCalculator: any MetricCalculator = AdaptiveDominantAxisCalculator()
+    ) {
+        self.init(
+            metricCalculator: metricCalculator,
+            peakDetector: LocalExtremaPeakDetector(
+                historyCapacity: configuration.peakHistoryCapacity,
+                minPeakHeight: configuration.minPeakHeight,
+                minValleyDepth: configuration.minValleyDepth,
+                windowSize: configuration.peakWindowSize
+            ),
+            repCounter: CycleBasedRepCounter(
+                minTimeBetweenReps: configuration.minTimeBetweenReps,
+                minAmplitude: configuration.minAmplitude,
+                upThreshold: configuration.upThreshold,
+                downThreshold: configuration.downThreshold,
+                inactivityResetSeconds: configuration.inactivityResetSeconds,
+                activityDeltaThreshold: configuration.activityDeltaThreshold
+            ),
+            metricFilters: [
+                SpikeRejectionFilter(maxDelta: configuration.spikeMaxDelta),
+                EMAMetricFilter(alpha: configuration.emaAlpha),
+            ],
+            armingThreshold: configuration.armingThreshold
+        )
+    }
+
     public func ingest(_ poseFrame: PoseFrame) {
         processingQueue.async { [weak self] in
             self?.process(poseFrame)
@@ -77,9 +155,16 @@ public final class RepCounterPublisher {
 
     private func process(_ poseFrame: PoseFrame) {
         guard let metric = metricCalculator.calculate(from: poseFrame.joints) else {
-            sendOutput(poseFrame: poseFrame, metric: nil, quality: .poor)
+            sendOutput(
+                poseFrame: poseFrame,
+                metric: nil,
+                quality: .poor,
+                trackedJoints: metricCalculator.trackedJoints(from: poseFrame.joints)
+            )
             return
         }
+
+        let trackedJoints = metricCalculator.trackedJoints(from: poseFrame.joints)
 
         // Explicit write-back guards against Swift existential mutation edge cases
         var filteredMetric = metric
@@ -89,6 +174,8 @@ public final class RepCounterPublisher {
             metricFilters[i] = f
         }
         logger.debug("metric=\(filteredMetric, format: .fixed(precision: 3))")
+
+        repCounter.ingestSample(timestamp: poseFrame.timestamp, metricValue: filteredMetric)
 
         metricWindow.append(filteredMetric)
         if metricWindow.count > metricWindowCapacity { metricWindow.removeFirst() }
@@ -118,17 +205,28 @@ public final class RepCounterPublisher {
         let quality: DetectionQuality = poseFrame.joints.count >= 10 ? .good :
                                         poseFrame.joints.count >= 5 ? .partial : .poor
 
-        sendOutput(poseFrame: poseFrame, metric: filteredMetric, quality: quality)
+        sendOutput(
+            poseFrame: poseFrame,
+            metric: filteredMetric,
+            quality: quality,
+            trackedJoints: trackedJoints
+        )
     }
 
-    private func sendOutput(poseFrame: PoseFrame, metric: CGFloat?, quality: DetectionQuality) {
+    private func sendOutput(
+        poseFrame: PoseFrame,
+        metric: CGFloat?,
+        quality: DetectionQuality,
+        trackedJoints: [VNHumanBodyPose3DObservation.JointName]
+    ) {
         let output = RepCounterOutput(
             poseFrame: poseFrame,
             repCount: repCounter.count,
             currentMetric: metric,
             state: repCounter.state,
             detectionQuality: quality,
-            runningMax: runningMax
+            runningMax: runningMax,
+            trackedJoints: trackedJoints
         )
         subject.send(output)
     }

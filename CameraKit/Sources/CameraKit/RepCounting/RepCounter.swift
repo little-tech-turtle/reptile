@@ -15,8 +15,13 @@ public enum RepCounterState: String, Sendable {
 public protocol RepCounter {
     var count: Int { get }
     var state: RepCounterState { get }
+    mutating func ingestSample(timestamp: CMTime, metricValue: CGFloat)
     mutating func processPeak(_ peak: PeakType, timestamp: CMTime, metricValue: CGFloat)
     mutating func reset()
+}
+
+public extension RepCounter {
+    mutating func ingestSample(timestamp: CMTime, metricValue: CGFloat) {}
 }
 
 /// Counts reps using an alternating-peak state machine with an amplitude gate.
@@ -39,17 +44,46 @@ public struct CycleBasedRepCounter: RepCounter {
     private let minAmplitude: CGFloat
     private let upThreshold: CGFloat
     private let downThreshold: CGFloat
+    private let inactivityResetSeconds: Double
+    private let activityDeltaThreshold: CGFloat
+
+    private var lastObservedMetric: CGFloat?
+    private var lastActivityTime: CMTime?
+    private var idleResetArmed: Bool = true
 
     public init(
         minTimeBetweenReps: Double = 0.5,
         minAmplitude: CGFloat = 0.15,
         upThreshold: CGFloat = 0.6,
-        downThreshold: CGFloat = 0.3
+        downThreshold: CGFloat = 0.3,
+        inactivityResetSeconds: Double = 3.0,
+        activityDeltaThreshold: CGFloat = 0.015
     ) {
         self.minTimeBetweenReps = minTimeBetweenReps
         self.minAmplitude = minAmplitude
         self.upThreshold = upThreshold
         self.downThreshold = downThreshold
+        self.inactivityResetSeconds = inactivityResetSeconds
+        self.activityDeltaThreshold = activityDeltaThreshold
+    }
+
+    public mutating func ingestSample(timestamp: CMTime, metricValue: CGFloat) {
+        let delta = abs(metricValue - (lastObservedMetric ?? metricValue))
+        if lastObservedMetric == nil || delta >= activityDeltaThreshold {
+            lastActivityTime = timestamp
+            idleResetArmed = true
+        }
+        lastObservedMetric = metricValue
+
+        guard let activityTime = lastActivityTime else { return }
+        let idleSeconds = CMTimeGetSeconds(timestamp - activityTime)
+        guard idleSeconds >= inactivityResetSeconds, idleResetArmed else { return }
+
+        if count > 0 {
+            logger.info("Rep counter reset after idle timeout (\(idleSeconds, format: .fixed(precision: 2))s)")
+            reset()
+        }
+        idleResetArmed = false
     }
 
     public mutating func processPeak(_ peak: PeakType, timestamp: CMTime, metricValue: CGFloat) {
@@ -109,5 +143,8 @@ public struct CycleBasedRepCounter: RepCounter {
         lastPeakTime = .zero
         lastPeakType = nil
         lastPeakValue = 0
+        lastObservedMetric = nil
+        lastActivityTime = nil
+        idleResetArmed = true
     }
 }

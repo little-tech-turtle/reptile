@@ -122,6 +122,7 @@ final class LiveCameraViewController: UIViewController {
 
     private func render(_ model: LiveCameraRenderModel) {
         overlayView.joints = model.joints
+        overlayView.highlightedJoints = model.trackedJoints
         statusLabel.text = model.statusText
 
         if let output = model.output {

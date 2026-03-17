@@ -5,6 +5,7 @@
 
 import UIKit
 import CameraKit
+import Vision
 
 final class DebugOverlayView: UIView {
     private var history: [CGFloat] = []
@@ -13,6 +14,7 @@ final class DebugOverlayView: UIView {
     private var repCount: Int = 0
     private var stateName: String = "--"
     private var jointCount: Int = 0
+    private var trackedJointName: String = "--"
 
     func update(output: RepCounterOutput) {
         if let m = output.currentMetric {
@@ -24,6 +26,7 @@ final class DebugOverlayView: UIView {
         repCount = output.repCount
         stateName = output.state.rawValue
         jointCount = output.poseFrame.joints.count
+        trackedJointName = formatTrackedJoints(output.trackedJoints)
         setNeedsDisplay()
     }
 
@@ -121,8 +124,8 @@ final class DebugOverlayView: UIView {
     }
 
     private func drawStats(in rect: CGRect) {
-        let text = String(format: "metric: %.2f   state: %@   joints: %d   reps: %d",
-                          currentMetric, stateName, jointCount, repCount)
+        let text = String(format: "metric: %.2f   state: %@   tracked: %@   joints: %d   reps: %d",
+                          currentMetric, stateName, trackedJointName, jointCount, repCount)
         let attrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: UIColor.white,
             .font: UIFont.systemFont(ofSize: 13, weight: .regular),
@@ -134,5 +137,25 @@ final class DebugOverlayView: UIView {
             y: rect.minY + (rect.height - size.height) / 2
         )
         str.draw(at: origin)
+    }
+
+    private func formatTrackedJoints(_ joints: [VNHumanBodyPose3DObservation.JointName]) -> String {
+        guard !joints.isEmpty else { return "--" }
+        let names = joints.map(shortName(for:)).sorted()
+        return names.joined(separator: "+")
+    }
+
+    private func shortName(for joint: VNHumanBodyPose3DObservation.JointName) -> String {
+        switch joint {
+        case .root: return "root"
+        case .spine: return "spine"
+        case .leftHip: return "leftHip"
+        case .rightHip: return "rightHip"
+        case .leftShoulder: return "leftShoulder"
+        case .rightShoulder: return "rightShoulder"
+        case .leftWrist: return "leftWrist"
+        case .rightWrist: return "rightWrist"
+        default: return String(describing: joint)
+        }
     }
 }

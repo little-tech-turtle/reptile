@@ -13,6 +13,10 @@ final class SkeletonOverlayView: UIView {
     var joints: [VNHumanBodyPose3DObservation.JointName: CGPoint] = [:] {
         didSet {setNeedsDisplay()}
     }
+
+    var highlightedJoints: Set<VNHumanBodyPose3DObservation.JointName> = [] {
+        didSet {setNeedsDisplay()}
+    }
     
     override func draw(_ rect: CGRect) {
         guard !joints.isEmpty else {return}
@@ -50,14 +54,15 @@ final class SkeletonOverlayView: UIView {
         UIColor.white.setStroke()
         path.stroke()
         
-        for (_, point) in joints {
-            let r : CGFloat = 4
+        for (joint, point) in joints {
+            let isHighlighted = highlightedJoints.contains(joint)
+            let r : CGFloat = isHighlighted ? 5 : 4
             let rect = CGRect(x: point.x - r,
-                              y: point.y - r,
-                              width: 2 * r,
-                              height: 2 * r)
+                               y: point.y - r,
+                               width: 2 * r,
+                               height: 2 * r)
             let circle = UIBezierPath(ovalIn: rect)
-            UIColor.white.setFill()
+            (isHighlighted ? UIColor.systemGreen : UIColor.white).setFill()
             circle.fill()
         }
     

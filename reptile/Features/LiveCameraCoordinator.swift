@@ -5,6 +5,19 @@ import Foundation
 import UIKit
 import Vision
 
+private let defaultRepTuning = RepCountingConfiguration(
+    armingThreshold: 0.5,
+    minPeakHeight: 0.08,
+    minValleyDepth: 0.08,
+    peakWindowSize: 5,
+    minTimeBetweenReps: 0.5,
+    minAmplitude: 0.15,
+    inactivityResetSeconds: 3.0,
+    activityDeltaThreshold: 0.015,
+    spikeMaxDelta: 0.25,
+    emaAlpha: 0.3
+)
+
 @MainActor
 final class LiveCameraCoordinator {
     private let pipeline: LivePipeline
@@ -18,10 +31,12 @@ final class LiveCameraCoordinator {
     private var latestOutput: RepCounterOutput?
 
     init(
-        pipeline: LivePipeline = LivePipeline(),
+        pipeline: LivePipeline? = nil,
         projector: ScreenSpaceProjector = ScreenSpaceProjector()
     ) {
-        self.pipeline = pipeline
+        self.pipeline = pipeline ?? LivePipeline(
+            repCounter: RepCounterPublisher(configuration: defaultRepTuning)
+        )
         self.projector = projector
         bindPipeline()
     }
@@ -87,11 +102,13 @@ final class LiveCameraCoordinator {
 
         let joints = projectedJoints(from: latestOutput)
         let status = statusText(state: latestState, output: latestOutput)
+        let trackedJoints = Set(latestOutput?.trackedJoints ?? [])
 
         renderHandler(
             LiveCameraRenderModel(
                 statusText: status,
                 joints: joints,
+                trackedJoints: trackedJoints,
                 output: latestOutput
             )
         )

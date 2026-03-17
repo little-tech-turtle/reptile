@@ -1,6 +1,7 @@
 import Testing
 import CoreMedia
 @testable import CameraKit
+import Vision
 
 #if canImport(UIKit)
 import UIKit
@@ -94,8 +95,18 @@ private func feedDetector(_ detector: inout LocalExtremaPeakDetector, values: [C
 
 // MARK: - CycleBasedRepCounter
 
-private func makeCounter(minAmplitude: CGFloat = 0.15, minTime: Double = 0.5) -> CycleBasedRepCounter {
-    CycleBasedRepCounter(minTimeBetweenReps: minTime, minAmplitude: minAmplitude)
+private func makeCounter(
+    minAmplitude: CGFloat = 0.15,
+    minTime: Double = 0.5,
+    inactivityResetSeconds: Double = 3.0,
+    activityDeltaThreshold: CGFloat = 0.015
+) -> CycleBasedRepCounter {
+    CycleBasedRepCounter(
+        minTimeBetweenReps: minTime,
+        minAmplitude: minAmplitude,
+        inactivityResetSeconds: inactivityResetSeconds,
+        activityDeltaThreshold: activityDeltaThreshold
+    )
 }
 
 private func time(_ seconds: Double) -> CMTime {
@@ -174,6 +185,37 @@ private func time(_ seconds: Double) -> CMTime {
     // After reset, lastPeakType is nil — a lone minimum should not count
     counter.processPeak(.minimum, timestamp: time(2), metricValue: 0.05)
     #expect(counter.count == 0)
+}
+
+@Test func repCounter_resetsAfterThreeSecondsOfNoActivity() {
+    var counter = makeCounter(inactivityResetSeconds: 3.0, activityDeltaThreshold: 0.02)
+
+    counter.ingestSample(timestamp: time(0.0), metricValue: 0.9)
+    counter.processPeak(.maximum, timestamp: time(0.0), metricValue: 0.9)
+    counter.ingestSample(timestamp: time(1.0), metricValue: 0.1)
+    counter.processPeak(.minimum, timestamp: time(1.0), metricValue: 0.1)
+    #expect(counter.count == 1)
+
+    counter.ingestSample(timestamp: time(3.9), metricValue: 0.1)
+    #expect(counter.count == 1)
+
+    counter.ingestSample(timestamp: time(4.2), metricValue: 0.1)
+    #expect(counter.count == 0)
+    #expect(counter.state == .transition)
+}
+
+@Test func repCounter_doesNotResetWhenActivityContinues() {
+    var counter = makeCounter(inactivityResetSeconds: 3.0, activityDeltaThreshold: 0.02)
+
+    counter.ingestSample(timestamp: time(0.0), metricValue: 0.9)
+    counter.processPeak(.maximum, timestamp: time(0.0), metricValue: 0.9)
+    counter.ingestSample(timestamp: time(1.0), metricValue: 0.1)
+    counter.processPeak(.minimum, timestamp: time(1.0), metricValue: 0.1)
+    #expect(counter.count == 1)
+
+    counter.ingestSample(timestamp: time(2.5), metricValue: 0.2)
+    counter.ingestSample(timestamp: time(4.9), metricValue: 0.35)
+    #expect(counter.count == 1)
 }
 
 @Test func repCounter_manyMaximaFollowedByMinimumCountsOne() {
@@ -273,6 +315,155 @@ private func time(_ seconds: Double) -> CMTime {
     #expect(FrameTransformPolicy.previewRotationAngle(for: .landscapeRight) == 180)
 }
 #endif
+
+// MARK: - DistanceFromFloorCalculator
+
+private func motionJoints(
+    rootX: CGFloat = 0.5,
+    leftWristX: CGFloat = 0.5,
+    rightWristX: CGFloat = 0.5,
+    y: CGFloat = 0.5
+) -> [VNHumanBodyPose3DObservation.JointName: CameraKit.NormalizedPoint] {
+    [
+        .root: CameraKit.NormalizedPoint(x: rootX, y: y),
+        .leftWrist: CameraKit.NormalizedPoint(x: leftWristX, y: y),
+        .rightWrist: CameraKit.NormalizedPoint(x: rightWristX, y: y),
+    ]
+}
+
+@Test func adaptiveCalculator_selectsMostMovingJoint() {
+    let calculator = AdaptiveDominantAxisCalculator(
+        switchMargin: 1.15,
+        switchConfirmationFrames: 2
+    )
+
+    let frames: [[VNHumanBodyPose3DObservation.JointName: CameraKit.NormalizedPoint]] = [
+        motionJoints(rightWristX: 0.50),
+        motionJoints(rightWristX: 0.80),
+        motionJoints(rightWristX: 0.20),
+        motionJoints(rightWristX: 0.78),
+        motionJoints(rightWristX: 0.22),
+    ]
+
+    for joints in frames {
+        _ = calculator.calculate(from: joints)
+    }
+
+    #expect(calculator.trackedJoints(from: frames.last!) == [VNHumanBodyPose3DObservation.JointName.rightWrist])
+}
+
+@Test func adaptiveCalculator_doesNotSwitchOnSingleFrameSpike() {
+    let calculator = AdaptiveDominantAxisCalculator(
+        switchMargin: 1.20,
+        switchConfirmationFrames: 3
+    )
+
+    let primeFrames: [[VNHumanBodyPose3DObservation.JointName: CameraKit.NormalizedPoint]] = [
+        motionJoints(rightWristX: 0.50),
+        motionJoints(rightWristX: 0.82),
+        motionJoints(rightWristX: 0.18),
+        motionJoints(rightWristX: 0.80),
+    ]
+
+    for joints in primeFrames {
+        _ = calculator.calculate(from: joints)
+    }
+    #expect(calculator.trackedJoints(from: primeFrames.last!) == [VNHumanBodyPose3DObservation.JointName.rightWrist])
+
+    let spikeFrame = motionJoints(leftWristX: 0.95, rightWristX: 0.80)
+    _ = calculator.calculate(from: spikeFrame)
+    #expect(calculator.trackedJoints(from: spikeFrame) == [VNHumanBodyPose3DObservation.JointName.rightWrist])
+}
+
+@Test func adaptiveCalculator_switchesAfterSustainedStrongerMotion() {
+    let calculator = AdaptiveDominantAxisCalculator(
+        switchMargin: 1.15,
+        switchConfirmationFrames: 2
+    )
+
+    let rightDominant: [[VNHumanBodyPose3DObservation.JointName: CameraKit.NormalizedPoint]] = [
+        motionJoints(rightWristX: 0.50),
+        motionJoints(rightWristX: 0.80),
+        motionJoints(rightWristX: 0.20),
+        motionJoints(rightWristX: 0.78),
+    ]
+    for joints in rightDominant {
+        _ = calculator.calculate(from: joints)
+    }
+    #expect(calculator.trackedJoints(from: rightDominant.last!) == [VNHumanBodyPose3DObservation.JointName.rightWrist])
+
+    let leftDominant: [[VNHumanBodyPose3DObservation.JointName: CameraKit.NormalizedPoint]] = [
+        motionJoints(leftWristX: 0.10, rightWristX: 0.78),
+        motionJoints(leftWristX: 0.90, rightWristX: 0.78),
+        motionJoints(leftWristX: 0.15, rightWristX: 0.78),
+        motionJoints(leftWristX: 0.85, rightWristX: 0.78),
+    ]
+    for joints in leftDominant {
+        _ = calculator.calculate(from: joints)
+    }
+
+    #expect(calculator.trackedJoints(from: leftDominant.last!) == [VNHumanBodyPose3DObservation.JointName.leftWrist])
+}
+
+@Test func distanceFromFloor_verticalMovementChangesMetric() {
+    let calculator = DistanceFromFloorCalculator()
+
+    let standing: [VNHumanBodyPose3DObservation.JointName: CameraKit.NormalizedPoint] = [
+        .root: CameraKit.NormalizedPoint(x: 0.20, y: 0.50),
+    ]
+    let crouched: [VNHumanBodyPose3DObservation.JointName: CameraKit.NormalizedPoint] = [
+        .root: CameraKit.NormalizedPoint(x: 0.80, y: 0.50),
+    ]
+
+    let standingMetric = calculator.calculate(from: standing)
+    let crouchedMetric = calculator.calculate(from: crouched)
+
+    #expect(standingMetric != nil)
+    #expect(crouchedMetric != nil)
+    #expect(standingMetric! > crouchedMetric!)
+}
+
+@Test func distanceFromFloor_horizontalMovementDoesNotChangeMetric() {
+    let calculator = DistanceFromFloorCalculator()
+
+    let leftSide: [VNHumanBodyPose3DObservation.JointName: CameraKit.NormalizedPoint] = [
+        .root: CameraKit.NormalizedPoint(x: 0.35, y: 0.10),
+    ]
+    let rightSide: [VNHumanBodyPose3DObservation.JointName: CameraKit.NormalizedPoint] = [
+        .root: CameraKit.NormalizedPoint(x: 0.35, y: 0.90),
+    ]
+
+    let leftMetric = calculator.calculate(from: leftSide)
+    let rightMetric = calculator.calculate(from: rightSide)
+
+    #expect(leftMetric != nil)
+    #expect(rightMetric != nil)
+    #expect(abs(leftMetric! - rightMetric!) < 0.0001)
+}
+
+@Test func distanceFromFloor_trackedJoints_prefersRoot() {
+    let calculator = DistanceFromFloorCalculator()
+    let joints: [VNHumanBodyPose3DObservation.JointName: CameraKit.NormalizedPoint] = [
+        .root: CameraKit.NormalizedPoint(x: 0.40, y: 0.50),
+        .leftHip: CameraKit.NormalizedPoint(x: 0.45, y: 0.55),
+        .rightHip: CameraKit.NormalizedPoint(x: 0.45, y: 0.45),
+    ]
+
+    let tracked = calculator.trackedJoints(from: joints)
+    #expect(tracked == [VNHumanBodyPose3DObservation.JointName.root])
+}
+
+@Test func distanceFromFloor_trackedJoints_usesHipPairWhenRootMissing() {
+    let calculator = DistanceFromFloorCalculator()
+    let joints: [VNHumanBodyPose3DObservation.JointName: CameraKit.NormalizedPoint] = [
+        .leftHip: CameraKit.NormalizedPoint(x: 0.45, y: 0.55),
+        .rightHip: CameraKit.NormalizedPoint(x: 0.45, y: 0.45),
+    ]
+
+    let tracked = Set(calculator.trackedJoints(from: joints))
+    let expected: Set<VNHumanBodyPose3DObservation.JointName> = [.leftHip, .rightHip]
+    #expect(tracked == expected)
+}
 
 // MARK: - LivePipeline API
 

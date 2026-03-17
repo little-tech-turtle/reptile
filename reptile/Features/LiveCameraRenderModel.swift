@@ -5,5 +5,6 @@ import Vision
 struct LiveCameraRenderModel {
     let statusText: String
     let joints: [VNHumanBodyPose3DObservation.JointName: CGPoint]
+    let trackedJoints: Set<VNHumanBodyPose3DObservation.JointName>
     let output: RepCounterOutput?
 }
