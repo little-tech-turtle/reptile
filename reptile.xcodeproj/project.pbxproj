@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		E2C0B03D2F19A2E500E9723E /* CameraKit in Frameworks */ = {isa = PBXBuildFile; productRef = E2C0B03C2F19A2E500E9723E /* CameraKit */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		E23C713B2ED504D500801F8B /* reptile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = reptile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E2C0B03D2F19A2E500E9723E /* CameraKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +70,7 @@
 			);
 			name = reptile;
 			packageProductDependencies = (
+				E2C0B03C2F19A2E500E9723E /* CameraKit */,
 			);
 			productName = reptile;
 			productReference = E23C713B2ED504D500801F8B /* reptile.app */;
@@ -94,6 +100,9 @@
 			);
 			mainGroup = E23C71322ED504D500801F8B;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				E2C0B03B2F19A2E500E9723E /* XCLocalSwiftPackageReference "CameraKit" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E23C713C2ED504D500801F8B /* Products */;
 			projectDirPath = "";
@@ -251,8 +260,10 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = QXAB4W6VCF;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Camera access is required to detect body pose and count exercise reps.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -282,8 +293,10 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = QXAB4W6VCF;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Camera access is required to detect body pose and count exercise reps.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -328,6 +341,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		E2C0B03B2F19A2E500E9723E /* XCLocalSwiftPackageReference "CameraKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = CameraKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		E2C0B03C2F19A2E500E9723E /* CameraKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CameraKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = E23C71332ED504D500801F8B /* Project object */;
 }

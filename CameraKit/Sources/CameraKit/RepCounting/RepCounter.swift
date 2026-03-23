@@ -11,17 +11,44 @@ public enum RepCounterState: String, Sendable {
     case transition
 }
 
+public struct RepCounterTuning: Sendable {
+    public var minTimeBetweenReps: Double
+    public var minAmplitude: CGFloat
+    public var upThreshold: CGFloat
+    public var downThreshold: CGFloat
+    public var inactivityResetSeconds: Double
+    public var activityDeltaThreshold: CGFloat
+
+    public init(
+        minTimeBetweenReps: Double,
+        minAmplitude: CGFloat,
+        upThreshold: CGFloat,
+        downThreshold: CGFloat,
+        inactivityResetSeconds: Double,
+        activityDeltaThreshold: CGFloat
+    ) {
+        self.minTimeBetweenReps = minTimeBetweenReps
+        self.minAmplitude = minAmplitude
+        self.upThreshold = upThreshold
+        self.downThreshold = downThreshold
+        self.inactivityResetSeconds = inactivityResetSeconds
+        self.activityDeltaThreshold = activityDeltaThreshold
+    }
+}
+
 /// Protocol for counting reps based on peak patterns
 public protocol RepCounter {
     var count: Int { get }
     var state: RepCounterState { get }
     mutating func ingestSample(timestamp: CMTime, metricValue: CGFloat)
+    mutating func updateTuning(_ tuning: RepCounterTuning)
     mutating func processPeak(_ peak: PeakType, timestamp: CMTime, metricValue: CGFloat)
     mutating func reset()
 }
 
 public extension RepCounter {
     mutating func ingestSample(timestamp: CMTime, metricValue: CGFloat) {}
+    mutating func updateTuning(_ tuning: RepCounterTuning) {}
 }
 
 /// Counts reps using an alternating-peak state machine with an amplitude gate.
@@ -40,12 +67,12 @@ public struct CycleBasedRepCounter: RepCounter {
     private var lastPeakType: PeakType? = nil
     private var lastPeakValue: CGFloat = 0
 
-    private let minTimeBetweenReps: Double
-    private let minAmplitude: CGFloat
-    private let upThreshold: CGFloat
-    private let downThreshold: CGFloat
-    private let inactivityResetSeconds: Double
-    private let activityDeltaThreshold: CGFloat
+    private var minTimeBetweenReps: Double
+    private var minAmplitude: CGFloat
+    private var upThreshold: CGFloat
+    private var downThreshold: CGFloat
+    private var inactivityResetSeconds: Double
+    private var activityDeltaThreshold: CGFloat
 
     private var lastObservedMetric: CGFloat?
     private var lastActivityTime: CMTime?
@@ -65,6 +92,15 @@ public struct CycleBasedRepCounter: RepCounter {
         self.downThreshold = downThreshold
         self.inactivityResetSeconds = inactivityResetSeconds
         self.activityDeltaThreshold = activityDeltaThreshold
+    }
+
+    public mutating func updateTuning(_ tuning: RepCounterTuning) {
+        minTimeBetweenReps = tuning.minTimeBetweenReps
+        minAmplitude = tuning.minAmplitude
+        upThreshold = tuning.upThreshold
+        downThreshold = tuning.downThreshold
+        inactivityResetSeconds = tuning.inactivityResetSeconds
+        activityDeltaThreshold = tuning.activityDeltaThreshold
     }
 
     public mutating func ingestSample(timestamp: CMTime, metricValue: CGFloat) {

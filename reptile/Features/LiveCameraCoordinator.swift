@@ -5,23 +5,24 @@ import Foundation
 import UIKit
 import Vision
 
-private let defaultRepTuning = RepCountingConfiguration(
-    armingThreshold: 0.5,
-    minPeakHeight: 0.08,
-    minValleyDepth: 0.08,
-    peakWindowSize: 5,
-    minTimeBetweenReps: 0.5,
-    minAmplitude: 0.15,
-    inactivityResetSeconds: 3.0,
-    activityDeltaThreshold: 0.015,
-    spikeMaxDelta: 0.25,
-    emaAlpha: 0.3
-)
-
 @MainActor
 final class LiveCameraCoordinator {
+    static let defaultRepTuning = RepCountingConfiguration(
+        armingThreshold: 0.5,
+        minPeakHeight: 0.08,
+        minValleyDepth: 0.08,
+        peakWindowSize: 5,
+        minTimeBetweenReps: 0.5,
+        minAmplitude: 0.15,
+        inactivityResetSeconds: 3.0,
+        activityDeltaThreshold: 0.015,
+        spikeMaxDelta: 0.25,
+        emaAlpha: 0.3
+    )
+
     private let pipeline: LivePipeline
     private let projector: ScreenSpaceProjector
+    private var repTuning: RepCountingConfiguration
 
     private var cancellables = Set<AnyCancellable>()
     private weak var previewView: CameraPreviewView?
@@ -32,10 +33,12 @@ final class LiveCameraCoordinator {
 
     init(
         pipeline: LivePipeline? = nil,
+        repTuning: RepCountingConfiguration = LiveCameraCoordinator.defaultRepTuning,
         projector: ScreenSpaceProjector = ScreenSpaceProjector()
     ) {
+        self.repTuning = repTuning
         self.pipeline = pipeline ?? LivePipeline(
-            repCounter: RepCounterPublisher(configuration: defaultRepTuning)
+            repCounter: RepCounterPublisher(configuration: repTuning)
         )
         self.projector = projector
         bindPipeline()
@@ -66,6 +69,15 @@ final class LiveCameraCoordinator {
     func updateInterfaceOrientation(_ orientation: UIInterfaceOrientation) {
         pipeline.setInterfaceOrientation(orientation)
         updatePreviewOrientation(orientation)
+    }
+
+    func currentRepCountingConfiguration() -> RepCountingConfiguration {
+        repTuning
+    }
+
+    func updateRepCountingConfiguration(_ configuration: RepCountingConfiguration) {
+        repTuning = configuration
+        pipeline.updateRepCountingConfiguration(configuration)
     }
 
     private func bindPipeline() {
@@ -140,23 +152,11 @@ final class LiveCameraCoordinator {
         case .starting:
             return "Starting camera…"
         case .running:
-            guard let output else { return "" }
-            return "Reps: \(output.repCount) • State: \(output.state.rawValue) • \(qualityIndicator(for: output.detectionQuality))"
+            return ""
         case .stopping:
             return "Stopping camera…"
         case .failed(let error):
             return "Camera error: \(errorMessage(for: error))"
-        }
-    }
-
-    private func qualityIndicator(for quality: DetectionQuality) -> String {
-        switch quality {
-        case .good:
-            return "●"
-        case .partial:
-            return "◐"
-        case .poor:
-            return "○"
         }
     }
 

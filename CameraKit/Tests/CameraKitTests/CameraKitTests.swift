@@ -218,6 +218,53 @@ private func time(_ seconds: Double) -> CMTime {
     #expect(counter.count == 1)
 }
 
+@Test func repCounter_updateTuning_adjustsAmplitudeWithoutResettingCount() {
+    var counter = makeCounter(minAmplitude: 0.40)
+
+    counter.processPeak(.maximum, timestamp: time(0.0), metricValue: 0.90)
+    counter.processPeak(.minimum, timestamp: time(1.0), metricValue: 0.70)
+    #expect(counter.count == 0)
+
+    counter.updateTuning(
+        RepCounterTuning(
+            minTimeBetweenReps: 0.5,
+            minAmplitude: 0.15,
+            upThreshold: 0.6,
+            downThreshold: 0.3,
+            inactivityResetSeconds: 3.0,
+            activityDeltaThreshold: 0.015
+        )
+    )
+
+    counter.processPeak(.maximum, timestamp: time(2.0), metricValue: 0.90)
+    counter.processPeak(.minimum, timestamp: time(3.0), metricValue: 0.70)
+    #expect(counter.count == 1)
+}
+
+@Test func repCounter_updateTuning_changesIdleResetWindow() {
+    var counter = makeCounter(inactivityResetSeconds: 10.0, activityDeltaThreshold: 0.02)
+
+    counter.ingestSample(timestamp: time(0.0), metricValue: 0.9)
+    counter.processPeak(.maximum, timestamp: time(0.0), metricValue: 0.9)
+    counter.ingestSample(timestamp: time(1.0), metricValue: 0.1)
+    counter.processPeak(.minimum, timestamp: time(1.0), metricValue: 0.1)
+    #expect(counter.count == 1)
+
+    counter.updateTuning(
+        RepCounterTuning(
+            minTimeBetweenReps: 0.5,
+            minAmplitude: 0.15,
+            upThreshold: 0.6,
+            downThreshold: 0.3,
+            inactivityResetSeconds: 3.0,
+            activityDeltaThreshold: 0.02
+        )
+    )
+
+    counter.ingestSample(timestamp: time(4.2), metricValue: 0.1)
+    #expect(counter.count == 0)
+}
+
 @Test func repCounter_manyMaximaFollowedByMinimumCountsOne() {
     // Simulates the arming-broadcast pattern: publisher fires .maximum every frame
     // while the person is standing (above threshold). A single .minimum should

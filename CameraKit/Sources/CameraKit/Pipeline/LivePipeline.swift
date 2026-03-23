@@ -72,6 +72,10 @@ public final class LivePipeline {
         cameraSession.setCameraPosition(position)
     }
 
+    public func updateRepCountingConfiguration(_ configuration: RepCountingConfiguration) {
+        repCounter.updateConfiguration(configuration)
+    }
+
     private func wirePipeline() {
         cameraSession.frames
             .sink { [weak self] frame in

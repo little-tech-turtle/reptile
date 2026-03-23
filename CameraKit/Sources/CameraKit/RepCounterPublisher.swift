@@ -57,6 +57,17 @@ public struct RepCountingConfiguration: Sendable {
         self.spikeMaxDelta = spikeMaxDelta
         self.emaAlpha = emaAlpha
     }
+
+    var repCounterTuning: RepCounterTuning {
+        RepCounterTuning(
+            minTimeBetweenReps: minTimeBetweenReps,
+            minAmplitude: minAmplitude,
+            upThreshold: upThreshold,
+            downThreshold: downThreshold,
+            inactivityResetSeconds: inactivityResetSeconds,
+            activityDeltaThreshold: activityDeltaThreshold
+        )
+    }
 }
 
 /// Output from rep counter including pose and rep count
@@ -96,7 +107,7 @@ public final class RepCounterPublisher {
     private var peakDetector: any PeakDetector
     private var repCounter: any RepCounter
     private var metricFilters: [any MetricFilter]
-    private let armingThreshold: CGFloat
+    private var armingThreshold: CGFloat
     private var metricWindow: [CGFloat] = []
     private let metricWindowCapacity = 60
     private var runningMax: CGFloat { metricWindow.max() ?? 0 }
@@ -125,26 +136,23 @@ public final class RepCounterPublisher {
     ) {
         self.init(
             metricCalculator: metricCalculator,
-            peakDetector: LocalExtremaPeakDetector(
-                historyCapacity: configuration.peakHistoryCapacity,
-                minPeakHeight: configuration.minPeakHeight,
-                minValleyDepth: configuration.minValleyDepth,
-                windowSize: configuration.peakWindowSize
-            ),
-            repCounter: CycleBasedRepCounter(
-                minTimeBetweenReps: configuration.minTimeBetweenReps,
-                minAmplitude: configuration.minAmplitude,
-                upThreshold: configuration.upThreshold,
-                downThreshold: configuration.downThreshold,
-                inactivityResetSeconds: configuration.inactivityResetSeconds,
-                activityDeltaThreshold: configuration.activityDeltaThreshold
-            ),
-            metricFilters: [
-                SpikeRejectionFilter(maxDelta: configuration.spikeMaxDelta),
-                EMAMetricFilter(alpha: configuration.emaAlpha),
-            ],
+            peakDetector: Self.makePeakDetector(configuration),
+            repCounter: Self.makeRepCounter(configuration),
+            metricFilters: Self.makeMetricFilters(configuration),
             armingThreshold: configuration.armingThreshold
         )
+    }
+
+    public func updateConfiguration(_ configuration: RepCountingConfiguration) {
+        processingQueue.async { [weak self] in
+            guard let self else { return }
+
+            self.peakDetector = Self.makePeakDetector(configuration)
+            self.metricFilters = Self.makeMetricFilters(configuration)
+            self.armingThreshold = configuration.armingThreshold
+            self.repCounter.updateTuning(configuration.repCounterTuning)
+            self.metricWindow.removeAll()
+        }
     }
 
     public func ingest(_ poseFrame: PoseFrame) {
@@ -237,5 +245,32 @@ public final class RepCounterPublisher {
             self.repCounter.reset()
             self.metricWindow.removeAll()
         }
+    }
+
+    private static func makePeakDetector(_ configuration: RepCountingConfiguration) -> LocalExtremaPeakDetector {
+        LocalExtremaPeakDetector(
+            historyCapacity: configuration.peakHistoryCapacity,
+            minPeakHeight: configuration.minPeakHeight,
+            minValleyDepth: configuration.minValleyDepth,
+            windowSize: configuration.peakWindowSize
+        )
+    }
+
+    private static func makeRepCounter(_ configuration: RepCountingConfiguration) -> CycleBasedRepCounter {
+        CycleBasedRepCounter(
+            minTimeBetweenReps: configuration.minTimeBetweenReps,
+            minAmplitude: configuration.minAmplitude,
+            upThreshold: configuration.upThreshold,
+            downThreshold: configuration.downThreshold,
+            inactivityResetSeconds: configuration.inactivityResetSeconds,
+            activityDeltaThreshold: configuration.activityDeltaThreshold
+        )
+    }
+
+    private static func makeMetricFilters(_ configuration: RepCountingConfiguration) -> [any MetricFilter] {
+        [
+            SpikeRejectionFilter(maxDelta: configuration.spikeMaxDelta),
+            EMAMetricFilter(alpha: configuration.emaAlpha),
+        ]
     }
 }

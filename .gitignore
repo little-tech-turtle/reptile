@@ -1,0 +1,31 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Xcode user data
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+# Xcode build output
+DerivedData/
+build/
+*.moved-aside
+*.hmap
+
+# SwiftPM
+.build/
+.swiftpm/
+
+# Archives / symbols
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Logs
+*.log

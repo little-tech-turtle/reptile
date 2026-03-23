@@ -15,6 +15,18 @@ final class DebugOverlayView: UIView {
     private var stateName: String = "--"
     private var jointCount: Int = 0
     private var trackedJointName: String = "--"
+    private var upThreshold: CGFloat = 0.6
+    private var armingThreshold: CGFloat = 0.5
+    private var downThreshold: CGFloat = 0.3
+    private var minAmplitude: CGFloat = 0.15
+
+    func updateConfiguration(_ configuration: RepCountingConfiguration) {
+        upThreshold = configuration.upThreshold
+        armingThreshold = configuration.armingThreshold
+        downThreshold = configuration.downThreshold
+        minAmplitude = configuration.minAmplitude
+        setNeedsDisplay()
+    }
 
     func update(output: RepCounterOutput) {
         if let m = output.currentMetric {
@@ -57,10 +69,10 @@ final class DebugOverlayView: UIView {
 
     private func drawThresholds(in rect: CGRect, ctx: CGContext) {
         let thresholds: [(value: CGFloat, color: UIColor, label: String)] = [
-            (0.6, .systemGreen, "up"),
-            (0.5, .systemOrange, "arm"),
-            (0.3, .systemRed, "down"),
-            (max(0, runningMax - 0.15), .systemYellow, "trigger"),
+            (upThreshold, .systemGreen, "up"),
+            (armingThreshold, .systemOrange, "arm"),
+            (downThreshold, .systemRed, "down"),
+            (max(0, runningMax - minAmplitude), .systemYellow, "trigger"),
         ]
 
         let dash: [CGFloat] = [6, 4]
