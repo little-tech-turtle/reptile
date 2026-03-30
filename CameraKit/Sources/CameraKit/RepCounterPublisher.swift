@@ -25,6 +25,11 @@ public struct RepCountingConfiguration: Sendable {
     public var downThreshold: CGFloat
     public var squatDescendEntryThreshold: CGFloat
     public var squatStandLockoutThreshold: CGFloat
+    public var squatKneeBottomFlexionDegrees: CGFloat
+    public var squatHipBottomFlexionDegrees: CGFloat
+    public var squatKneeLockoutFlexionDegrees: CGFloat
+    public var squatHipLockoutFlexionDegrees: CGFloat
+    public var squatMaxSideAsymmetryDegrees: CGFloat
     public var inactivityResetSeconds: Double
     public var activityDeltaThreshold: CGFloat
     public var spikeMaxDelta: CGFloat
@@ -39,9 +44,14 @@ public struct RepCountingConfiguration: Sendable {
         minTimeBetweenReps: Double = 0.6,
         minAmplitude: CGFloat = 0.18,
         upThreshold: CGFloat = 0.20,
-        downThreshold: CGFloat = 0.62,
-        squatDescendEntryThreshold: CGFloat = 0.12,
+        downThreshold: CGFloat = 0.92,
+        squatDescendEntryThreshold: CGFloat = 0.18,
         squatStandLockoutThreshold: CGFloat = 0.10,
+        squatKneeBottomFlexionDegrees: CGFloat = 80,
+        squatHipBottomFlexionDegrees: CGFloat = 60,
+        squatKneeLockoutFlexionDegrees: CGFloat = 18,
+        squatHipLockoutFlexionDegrees: CGFloat = 20,
+        squatMaxSideAsymmetryDegrees: CGFloat = 25,
         inactivityResetSeconds: Double = 3.0,
         activityDeltaThreshold: CGFloat = 0.015,
         spikeMaxDelta: CGFloat = 0.25,
@@ -58,6 +68,11 @@ public struct RepCountingConfiguration: Sendable {
         self.downThreshold = downThreshold
         self.squatDescendEntryThreshold = squatDescendEntryThreshold
         self.squatStandLockoutThreshold = squatStandLockoutThreshold
+        self.squatKneeBottomFlexionDegrees = squatKneeBottomFlexionDegrees
+        self.squatHipBottomFlexionDegrees = squatHipBottomFlexionDegrees
+        self.squatKneeLockoutFlexionDegrees = squatKneeLockoutFlexionDegrees
+        self.squatHipLockoutFlexionDegrees = squatHipLockoutFlexionDegrees
+        self.squatMaxSideAsymmetryDegrees = squatMaxSideAsymmetryDegrees
         self.inactivityResetSeconds = inactivityResetSeconds
         self.activityDeltaThreshold = activityDeltaThreshold
         self.spikeMaxDelta = spikeMaxDelta
@@ -87,6 +102,7 @@ public struct RepCounterOutput: Sendable {
     public let detectionQuality: DetectionQuality
     public let runningMax: CGFloat
     public let trackedJoints: [VNHumanBodyPose3DObservation.JointName]
+    public let squatFlexionMetrics: SquatFlexionMetrics?
 
     public init(
         poseFrame: PoseFrame,
@@ -95,7 +111,8 @@ public struct RepCounterOutput: Sendable {
         state: RepCounterState,
         detectionQuality: DetectionQuality,
         runningMax: CGFloat = 0,
-        trackedJoints: [VNHumanBodyPose3DObservation.JointName] = []
+        trackedJoints: [VNHumanBodyPose3DObservation.JointName] = [],
+        squatFlexionMetrics: SquatFlexionMetrics? = nil
     ) {
         self.poseFrame = poseFrame
         self.repCount = repCount
@@ -104,6 +121,7 @@ public struct RepCounterOutput: Sendable {
         self.detectionQuality = detectionQuality
         self.runningMax = runningMax
         self.trackedJoints = trackedJoints
+        self.squatFlexionMetrics = squatFlexionMetrics
     }
 }
 
@@ -113,6 +131,7 @@ public final class RepCounterPublisher: @unchecked Sendable {
     private let processingQueue = DispatchQueue(label: "camerakit.repcount.processing")
     public let exerciseProfileID: String
 
+    private let metricCalculatorFactory: (RepCountingConfiguration) -> any MetricCalculator
     private let peakDetectorFactory: (RepCountingConfiguration) -> any PeakDetector
     private let metricFilterFactory: (RepCountingConfiguration) -> [any MetricFilter]
 
@@ -135,16 +154,18 @@ public final class RepCounterPublisher: @unchecked Sendable {
     }
 
     public init(
-        metricCalculator: any MetricCalculator = SquatDepthMetricCalculator(),
+        metricCalculator: any MetricCalculator = SquatJointFlexion3DMetricCalculator(),
         peakDetector: any PeakDetector = LocalExtremaPeakDetector(),
         repCounter: any RepCounter = SquatPhaseRepCounter(),
         metricFilters: [any MetricFilter] = [SpikeRejectionFilter(), EMAMetricFilter()],
         armingThreshold: CGFloat = 0.5,
         exerciseProfileID: String = "custom",
+        metricCalculatorFactory: ((RepCountingConfiguration) -> any MetricCalculator)? = nil,
         peakDetectorFactory: ((RepCountingConfiguration) -> any PeakDetector)? = nil,
         metricFilterFactory: ((RepCountingConfiguration) -> [any MetricFilter])? = nil
     ) {
         self.exerciseProfileID = exerciseProfileID
+        self.metricCalculatorFactory = metricCalculatorFactory ?? { _ in metricCalculator }
         self.peakDetectorFactory = peakDetectorFactory ?? { Self.makePeakDetector($0) }
         self.metricFilterFactory = metricFilterFactory ?? { Self.makeMetricFilters($0) }
         self.metricCalculator = metricCalculator
@@ -165,6 +186,7 @@ public final class RepCounterPublisher: @unchecked Sendable {
             metricFilters: exerciseProfile.makeMetricFilters(configuration: configuration),
             armingThreshold: configuration.armingThreshold,
             exerciseProfileID: exerciseProfile.id,
+            metricCalculatorFactory: { exerciseProfile.makeMetricCalculator(configuration: $0) },
             peakDetectorFactory: { exerciseProfile.makePeakDetector(configuration: $0) },
             metricFilterFactory: { exerciseProfile.makeMetricFilters(configuration: $0) }
         )
@@ -175,6 +197,7 @@ public final class RepCounterPublisher: @unchecked Sendable {
             guard let self else { return }
             self.assertOnProcessingQueue()
 
+            self.metricCalculator = self.metricCalculatorFactory(configuration)
             self.peakDetector = self.peakDetectorFactory(configuration)
             self.metricFilters = self.metricFilterFactory(configuration)
             self.armingThreshold = configuration.armingThreshold
@@ -192,12 +215,15 @@ public final class RepCounterPublisher: @unchecked Sendable {
     private func process(_ poseFrame: PoseFrame) {
         assertOnProcessingQueue()
 
+        let squatFlexionMetrics = currentSquatFlexionMetrics(from: poseFrame)
+
         guard let metric = metricCalculator.calculate(from: poseFrame) else {
             sendOutput(
                 poseFrame: poseFrame,
                 metric: nil,
                 quality: .poor,
-                trackedJoints: metricCalculator.trackedJoints(from: poseFrame)
+                trackedJoints: metricCalculator.trackedJoints(from: poseFrame),
+                squatFlexionMetrics: squatFlexionMetrics
             )
             return
         }
@@ -250,7 +276,8 @@ public final class RepCounterPublisher: @unchecked Sendable {
             poseFrame: poseFrame,
             metric: filteredMetric,
             quality: quality,
-            trackedJoints: trackedJoints
+            trackedJoints: trackedJoints,
+            squatFlexionMetrics: squatFlexionMetrics
         )
     }
 
@@ -258,7 +285,8 @@ public final class RepCounterPublisher: @unchecked Sendable {
         poseFrame: PoseFrame,
         metric: CGFloat?,
         quality: DetectionQuality,
-        trackedJoints: [VNHumanBodyPose3DObservation.JointName]
+        trackedJoints: [VNHumanBodyPose3DObservation.JointName],
+        squatFlexionMetrics: SquatFlexionMetrics?
     ) {
         assertOnProcessingQueue()
 
@@ -269,9 +297,17 @@ public final class RepCounterPublisher: @unchecked Sendable {
             state: repCounter.state,
             detectionQuality: quality,
             runningMax: runningMax,
-            trackedJoints: trackedJoints
+            trackedJoints: trackedJoints,
+            squatFlexionMetrics: squatFlexionMetrics
         )
         subject.send(output)
+    }
+
+    private func currentSquatFlexionMetrics(from poseFrame: PoseFrame) -> SquatFlexionMetrics? {
+        if let calculator = metricCalculator as? SquatJointFlexion3DMetricCalculator {
+            return calculator.flexionMetrics(from: poseFrame)
+        }
+        return nil
     }
 
     public func reset() {

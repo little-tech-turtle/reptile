@@ -62,6 +62,88 @@ private func squat3DPositions(
     ]
 }
 
+/// Builds synthetic 3D joints from explicit knee/hip flexion angles (degrees).
+///
+/// Flexion is defined as 0 = lockout/standing and larger values = deeper bend.
+private func squat3DJointFlexionPositions(
+    kneeFlexionDegrees: CGFloat,
+    hipFlexionDegrees: CGFloat,
+    cameraZ: Float = 2.0,
+    hideRightSide: Bool = false,
+    rightSideFlexionOffset: CGFloat = 0
+) -> [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>] {
+    func radians(_ degrees: CGFloat) -> CGFloat {
+        degrees * .pi / 180
+    }
+
+    func side(
+        xOffset: Float,
+        kneeFlexion: CGFloat,
+        hipFlexion: CGFloat
+    ) -> (shoulder: SIMD3<Float>, hip: SIMD3<Float>, knee: SIMD3<Float>, ankle: SIMD3<Float>) {
+        let thighLength: CGFloat = 0.45
+        let shinLength: CGFloat = 0.45
+        let torsoLength: CGFloat = 0.55
+
+        let hip = CGPoint(x: 0, y: -0.05)
+
+        // Standing thigh points down; deeper squat moves knee slightly forward.
+        let thighTilt = radians(min(35, max(0, kneeFlexion * 0.35)))
+        let knee = CGPoint(
+            x: hip.x + sin(thighTilt) * thighLength,
+            y: hip.y - cos(thighTilt) * thighLength
+        )
+
+        // Knee interior angle = 180 - kneeFlexion.
+        let backToHip = CGPoint(x: hip.x - knee.x, y: hip.y - knee.y)
+        let backToHipAngle = atan2(backToHip.y, backToHip.x)
+        let shinAngle = backToHipAngle + (.pi - radians(kneeFlexion))
+        let ankle = CGPoint(
+            x: knee.x + cos(shinAngle) * shinLength,
+            y: knee.y + sin(shinAngle) * shinLength
+        )
+
+        // Hip flexion leans torso forward from vertical.
+        let torsoTilt = radians(hipFlexion)
+        let shoulder = CGPoint(
+            x: hip.x + sin(torsoTilt) * torsoLength,
+            y: hip.y + cos(torsoTilt) * torsoLength
+        )
+
+        return (
+            shoulder: SIMD3(x: xOffset + Float(shoulder.x), y: Float(shoulder.y), z: cameraZ),
+            hip: SIMD3(x: xOffset + Float(hip.x), y: Float(hip.y), z: cameraZ),
+            knee: SIMD3(x: xOffset + Float(knee.x), y: Float(knee.y), z: cameraZ),
+            ankle: SIMD3(x: xOffset + Float(ankle.x), y: Float(ankle.y), z: cameraZ)
+        )
+    }
+
+    let left = side(xOffset: -0.18, kneeFlexion: kneeFlexionDegrees, hipFlexion: hipFlexionDegrees)
+    var joints: [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>] = [
+        .leftShoulder: left.shoulder,
+        .leftHip: left.hip,
+        .leftKnee: left.knee,
+        .leftAnkle: left.ankle,
+    ]
+
+    if !hideRightSide {
+        let right = side(
+            xOffset: 0.18,
+            kneeFlexion: kneeFlexionDegrees + rightSideFlexionOffset,
+            hipFlexion: hipFlexionDegrees + rightSideFlexionOffset
+        )
+        joints[.rightShoulder] = right.shoulder
+        joints[.rightHip] = right.hip
+        joints[.rightKnee] = right.knee
+        joints[.rightAnkle] = right.ankle
+    }
+
+    // Helpful fallbacks used by calculators.
+    joints[.spine] = SIMD3(x: 0, y: 0.25, z: cameraZ)
+    joints[.root] = SIMD3(x: 0, y: -0.10, z: cameraZ)
+    return joints
+}
+
 // MARK: - LocalExtremaPeakDetector
 
 @Test func peakDetector_detectsCleanMaximum() {
@@ -914,6 +996,99 @@ private func feedSquatCounter(
     #expect(calculator.calculate(from: makeFrame(positions3D: pos)) == nil)
 }
 
+// MARK: - SquatJointFlexion3DMetricCalculator
+
+@Test func squatJointFlexion3D_standingLowDeepHigh() {
+    let calculator = SquatJointFlexion3DMetricCalculator(
+        kneeBottomFlexionDegrees: 80,
+        hipBottomFlexionDegrees: 60,
+        kneeLockoutFlexionDegrees: 15,
+        hipLockoutFlexionDegrees: 20
+    )
+
+    let standing = calculator.calculate(from: makeFrame(positions3D: squat3DJointFlexionPositions(
+        kneeFlexionDegrees: 10,
+        hipFlexionDegrees: 10
+    )))
+    let deep = calculator.calculate(from: makeFrame(positions3D: squat3DJointFlexionPositions(
+        kneeFlexionDegrees: 95,
+        hipFlexionDegrees: 75
+    )))
+
+    #expect(standing != nil)
+    #expect(deep != nil)
+    #expect(standing! < 0.20)
+    #expect(deep! > 0.90)
+}
+
+@Test func squatJointFlexion3D_requiresBothHipAndKneeForBottom() {
+    let calculator = SquatJointFlexion3DMetricCalculator(
+        kneeBottomFlexionDegrees: 80,
+        hipBottomFlexionDegrees: 60,
+        kneeLockoutFlexionDegrees: 15,
+        hipLockoutFlexionDegrees: 20
+    )
+
+    let kneeOnly = calculator.calculate(from: makeFrame(positions3D: squat3DJointFlexionPositions(
+        kneeFlexionDegrees: 90,
+        hipFlexionDegrees: 20
+    )))
+    let hipOnly = calculator.calculate(from: makeFrame(positions3D: squat3DJointFlexionPositions(
+        kneeFlexionDegrees: 20,
+        hipFlexionDegrees: 75
+    )))
+
+    #expect(kneeOnly != nil)
+    #expect(hipOnly != nil)
+    #expect(kneeOnly! < 0.55)
+    #expect(hipOnly! < 0.55)
+}
+
+@Test func squatJointFlexion3D_fallsBackToSingleVisibleSide() {
+    let calculator = SquatJointFlexion3DMetricCalculator()
+    let metric = calculator.calculate(from: makeFrame(positions3D: squat3DJointFlexionPositions(
+        kneeFlexionDegrees: 85,
+        hipFlexionDegrees: 70,
+        hideRightSide: true
+    )))
+    #expect(metric != nil)
+}
+
+@Test func squatJointFlexion3D_rejectsLargeSideAsymmetry() {
+    let calculator = SquatJointFlexion3DMetricCalculator(maxSideAsymmetryDegrees: 20)
+    let metric = calculator.calculate(from: makeFrame(positions3D: squat3DJointFlexionPositions(
+        kneeFlexionDegrees: 80,
+        hipFlexionDegrees: 65,
+        rightSideFlexionOffset: -40
+    )))
+    #expect(metric == nil)
+}
+
+@Test func repCounterPublisher_exposesCurrentFlexionMetrics() async throws {
+    let config = RepCountingConfiguration(spikeMaxDelta: 1.0, emaAlpha: 1.0)
+    let publisher = RepCounterPublisher(configuration: config, exerciseProfile: SquatExerciseProfile())
+
+    final class OutputBox: @unchecked Sendable {
+        var latest: RepCounterOutput?
+    }
+    let box = OutputBox()
+    let cancellable = publisher.repCounts.sink { box.latest = $0 }
+
+    let frame = PoseFrame(
+        timestamp: CMTime(seconds: 0, preferredTimescale: 600),
+        joints: [:],
+        positions3D: squat3DJointFlexionPositions(kneeFlexionDegrees: 75, hipFlexionDegrees: 60)
+    )
+    publisher.ingest(frame)
+
+    try await Task.sleep(nanoseconds: 250_000_000)
+    _ = cancellable
+
+    #expect(box.latest?.squatFlexionMetrics != nil)
+    #expect((box.latest?.squatFlexionMetrics?.kneeFlexionDegrees ?? 0) > 40)
+    #expect((box.latest?.squatFlexionMetrics?.hipFlexionDegrees ?? 0) > 35)
+}
+
 @Test func repCounterPublisher_countsTwoSquatReps() async throws {
     let profile = SquatExerciseProfile()
     // spikeMaxDelta=1.0 + emaAlpha=1.0 disables both filters so controlled
@@ -922,6 +1097,7 @@ private func feedSquatCounter(
     let config = RepCountingConfiguration(
         minTimeBetweenReps: 0.4,
         minAmplitude: 0.15,
+        downThreshold: 0.80,
         spikeMaxDelta: 1.0,
         emaAlpha: 1.0
     )
@@ -934,14 +1110,17 @@ private func feedSquatCounter(
     let box = OutputBox()
     let cancellable = publisher.repCounts.sink { box.lastRepCount = $0.repCount }
 
-    let cycle: [CGFloat] = [0.05, 0.14, 0.24, 0.46, 0.66, 0.72, 0.56, 0.39, 0.20, 0.09, 0.05]
+    let cycle: [CGFloat] = [0.05, 0.18, 0.30, 0.52, 0.78, 0.95, 0.80, 0.60, 0.35, 0.15, 0.05]
     func ingestCycle(startSeconds: Double) {
         for (i, depth) in cycle.enumerated() {
             let t = CMTime(seconds: startSeconds + Double(i) * 0.1, preferredTimescale: 600)
             publisher.ingest(PoseFrame(
                 timestamp: t,
                 joints: squatJoints(depth: depth),
-                positions3D: squat3DPositions(squatDepth: depth)
+                positions3D: squat3DJointFlexionPositions(
+                    kneeFlexionDegrees: 10 + 95 * depth,
+                    hipFlexionDegrees: 10 + 75 * depth
+                )
             ))
         }
     }

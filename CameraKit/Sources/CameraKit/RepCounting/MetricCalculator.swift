@@ -1,6 +1,7 @@
 import Foundation
 import CoreGraphics
 import Vision
+import simd
 
 /// Protocol for extracting movement metrics from a pose frame
 public protocol MetricCalculator {
@@ -651,5 +652,250 @@ public final class SquatDepth3DMetricCalculator: MetricCalculator {
         names: [VNHumanBodyPose3DObservation.JointName]
     ) -> [VNHumanBodyPose3DObservation.JointName] {
         names.filter { p[$0] != nil }
+    }
+}
+
+public struct SquatFlexionMetrics: Sendable {
+    public let kneeFlexionDegrees: CGFloat?
+    public let hipFlexionDegrees: CGFloat?
+    public let leftKneeFlexionDegrees: CGFloat?
+    public let rightKneeFlexionDegrees: CGFloat?
+    public let leftHipFlexionDegrees: CGFloat?
+    public let rightHipFlexionDegrees: CGFloat?
+
+    public init(
+        kneeFlexionDegrees: CGFloat?,
+        hipFlexionDegrees: CGFloat?,
+        leftKneeFlexionDegrees: CGFloat?,
+        rightKneeFlexionDegrees: CGFloat?,
+        leftHipFlexionDegrees: CGFloat?,
+        rightHipFlexionDegrees: CGFloat?
+    ) {
+        self.kneeFlexionDegrees = kneeFlexionDegrees
+        self.hipFlexionDegrees = hipFlexionDegrees
+        self.leftKneeFlexionDegrees = leftKneeFlexionDegrees
+        self.rightKneeFlexionDegrees = rightKneeFlexionDegrees
+        self.leftHipFlexionDegrees = leftHipFlexionDegrees
+        self.rightHipFlexionDegrees = rightHipFlexionDegrees
+    }
+}
+
+/// Squat-specific 3D metric derived from knee and hip flexion angles.
+///
+/// The output metric is `0...1` where `0` means standing lockout and `1` means
+/// bottom depth criteria are met. It uses `min(kneeProgress, hipProgress)` so a
+/// valid bottom requires both joints to flex sufficiently.
+public final class SquatJointFlexion3DMetricCalculator: MetricCalculator {
+    private let kneeBottomFlexionDegrees: CGFloat
+    private let hipBottomFlexionDegrees: CGFloat
+    private let kneeLockoutFlexionDegrees: CGFloat
+    private let hipLockoutFlexionDegrees: CGFloat
+    private let maxSideAsymmetryDegrees: CGFloat
+
+    public init(
+        kneeBottomFlexionDegrees: CGFloat = 80,
+        hipBottomFlexionDegrees: CGFloat = 60,
+        kneeLockoutFlexionDegrees: CGFloat = 18,
+        hipLockoutFlexionDegrees: CGFloat = 20,
+        maxSideAsymmetryDegrees: CGFloat = 25
+    ) {
+        self.kneeBottomFlexionDegrees = max(kneeBottomFlexionDegrees, kneeLockoutFlexionDegrees + 5)
+        self.hipBottomFlexionDegrees = max(hipBottomFlexionDegrees, hipLockoutFlexionDegrees + 5)
+        self.kneeLockoutFlexionDegrees = max(0, kneeLockoutFlexionDegrees)
+        self.hipLockoutFlexionDegrees = max(0, hipLockoutFlexionDegrees)
+        self.maxSideAsymmetryDegrees = max(0, maxSideAsymmetryDegrees)
+    }
+
+    public func calculate(from frame: PoseFrame) -> CGFloat? {
+        guard let flexion = flexionMetrics(from: frame),
+              let kneeFlexion = flexion.kneeFlexionDegrees,
+              let hipFlexion = flexion.hipFlexionDegrees else {
+            return nil
+        }
+
+        let kneeProgress = normalize(
+            value: kneeFlexion,
+            lower: kneeLockoutFlexionDegrees,
+            upper: kneeBottomFlexionDegrees
+        )
+        let hipProgress = normalize(
+            value: hipFlexion,
+            lower: hipLockoutFlexionDegrees,
+            upper: hipBottomFlexionDegrees
+        )
+
+        return clamp(min(kneeProgress, hipProgress))
+    }
+
+    public func trackedJoints(from frame: PoseFrame) -> [VNHumanBodyPose3DObservation.JointName] {
+        guard let usage = selectedSides(from: frame.positions3D) else { return [] }
+
+        var joints: [VNHumanBodyPose3DObservation.JointName] = []
+        joints.reserveCapacity(8)
+
+        if usage.useLeft {
+            joints.append(contentsOf: [.leftShoulder, .leftHip, .leftKnee, .leftAnkle])
+        }
+        if usage.useRight {
+            joints.append(contentsOf: [.rightShoulder, .rightHip, .rightKnee, .rightAnkle])
+        }
+        if !usage.useLeft, !usage.useRight {
+            joints.append(contentsOf: available(in: frame.positions3D, names: [.spine, .root]))
+        }
+        return joints.filter { frame.positions3D[$0] != nil }
+    }
+
+    public func flexionMetrics(from frame: PoseFrame) -> SquatFlexionMetrics? {
+        let points = frame.positions3D
+        guard let usage = selectedSides(from: points) else { return nil }
+
+        let leftKnee = usage.useLeft ? kneeFlexion(for: .left, points: points) : nil
+        let rightKnee = usage.useRight ? kneeFlexion(for: .right, points: points) : nil
+        let leftHip = usage.useLeft ? hipFlexion(for: .left, points: points) : nil
+        let rightHip = usage.useRight ? hipFlexion(for: .right, points: points) : nil
+
+        let knee = average(leftKnee, rightKnee)
+        let hip = average(leftHip, rightHip)
+
+        return SquatFlexionMetrics(
+            kneeFlexionDegrees: knee,
+            hipFlexionDegrees: hip,
+            leftKneeFlexionDegrees: leftKnee,
+            rightKneeFlexionDegrees: rightKnee,
+            leftHipFlexionDegrees: leftHip,
+            rightHipFlexionDegrees: rightHip
+        )
+    }
+
+    private enum Side {
+        case left
+        case right
+    }
+
+    private struct SideSelection {
+        let useLeft: Bool
+        let useRight: Bool
+    }
+
+    private func selectedSides(
+        from points: [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>]
+    ) -> SideSelection? {
+        let leftKnee = kneeFlexion(for: .left, points: points)
+        let rightKnee = kneeFlexion(for: .right, points: points)
+        let leftHip = hipFlexion(for: .left, points: points)
+        let rightHip = hipFlexion(for: .right, points: points)
+
+        let leftReady = leftKnee != nil && leftHip != nil
+        let rightReady = rightKnee != nil && rightHip != nil
+
+        if leftReady, rightReady {
+            guard let leftKnee, let rightKnee, let leftHip, let rightHip else { return nil }
+            let kneeDelta = abs(leftKnee - rightKnee)
+            let hipDelta = abs(leftHip - rightHip)
+            guard kneeDelta <= maxSideAsymmetryDegrees,
+                  hipDelta <= maxSideAsymmetryDegrees else {
+                return nil
+            }
+            return SideSelection(useLeft: true, useRight: true)
+        }
+
+        if leftReady {
+            return SideSelection(useLeft: true, useRight: false)
+        }
+        if rightReady {
+            return SideSelection(useLeft: false, useRight: true)
+        }
+        return nil
+    }
+
+    private func kneeFlexion(
+        for side: Side,
+        points: [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>]
+    ) -> CGFloat? {
+        let joints = sideJoints(side)
+        guard let hip = points[joints.hip],
+              let knee = points[joints.knee],
+              let ankle = points[joints.ankle],
+              let angle = jointAngle(a: hip, vertex: knee, b: ankle) else {
+            return nil
+        }
+        return clampDegrees(180 - angle)
+    }
+
+    private func hipFlexion(
+        for side: Side,
+        points: [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>]
+    ) -> CGFloat? {
+        let joints = sideJoints(side)
+        guard let hip = points[joints.hip],
+              let knee = points[joints.knee],
+              let shoulder = points[joints.shoulder] ?? points[.spine] ?? points[.root],
+              let angle = jointAngle(a: shoulder, vertex: hip, b: knee) else {
+            return nil
+        }
+        return clampDegrees(180 - angle)
+    }
+
+    private func sideJoints(
+        _ side: Side
+    ) -> (
+        shoulder: VNHumanBodyPose3DObservation.JointName,
+        hip: VNHumanBodyPose3DObservation.JointName,
+        knee: VNHumanBodyPose3DObservation.JointName,
+        ankle: VNHumanBodyPose3DObservation.JointName
+    ) {
+        switch side {
+        case .left:
+            return (.leftShoulder, .leftHip, .leftKnee, .leftAnkle)
+        case .right:
+            return (.rightShoulder, .rightHip, .rightKnee, .rightAnkle)
+        }
+    }
+
+    private func jointAngle(a: SIMD3<Float>, vertex: SIMD3<Float>, b: SIMD3<Float>) -> CGFloat? {
+        let va = SIMD3<Float>(a.x - vertex.x, a.y - vertex.y, a.z - vertex.z)
+        let vb = SIMD3<Float>(b.x - vertex.x, b.y - vertex.y, b.z - vertex.z)
+
+        let ma = simd_length(va)
+        let mb = simd_length(vb)
+        guard ma > 0.0001, mb > 0.0001 else { return nil }
+
+        let dot = simd_dot(va, vb)
+        let cosTheta = max(-1 as Float, min(1 as Float, dot / (ma * mb)))
+        let radians = acos(cosTheta)
+        return CGFloat(radians * 180 / .pi)
+    }
+
+    private func normalize(value: CGFloat, lower: CGFloat, upper: CGFloat) -> CGFloat {
+        let range = max(upper - lower, 0.0001)
+        return (value - lower) / range
+    }
+
+    private func average(_ lhs: CGFloat?, _ rhs: CGFloat?) -> CGFloat? {
+        switch (lhs, rhs) {
+        case let (l?, r?):
+            return (l + r) / 2
+        case let (l?, nil):
+            return l
+        case let (nil, r?):
+            return r
+        default:
+            return nil
+        }
+    }
+
+    private func clamp(_ value: CGFloat) -> CGFloat {
+        min(1, max(0, value))
+    }
+
+    private func clampDegrees(_ value: CGFloat) -> CGFloat {
+        min(180, max(0, value))
+    }
+
+    private func available(
+        in points: [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>],
+        names: [VNHumanBodyPose3DObservation.JointName]
+    ) -> [VNHumanBodyPose3DObservation.JointName] {
+        names.filter { points[$0] != nil }
     }
 }

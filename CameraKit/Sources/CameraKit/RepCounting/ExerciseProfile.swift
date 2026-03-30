@@ -15,7 +15,13 @@ public struct SquatExerciseProfile: ExerciseProfile {
     public init() {}
 
     public func makeMetricCalculator(configuration: RepCountingConfiguration) -> any MetricCalculator {
-        SquatDepth3DMetricCalculator()
+        SquatJointFlexion3DMetricCalculator(
+            kneeBottomFlexionDegrees: configuration.squatKneeBottomFlexionDegrees,
+            hipBottomFlexionDegrees: configuration.squatHipBottomFlexionDegrees,
+            kneeLockoutFlexionDegrees: configuration.squatKneeLockoutFlexionDegrees,
+            hipLockoutFlexionDegrees: configuration.squatHipLockoutFlexionDegrees,
+            maxSideAsymmetryDegrees: configuration.squatMaxSideAsymmetryDegrees
+        )
     }
 
     public func makePeakDetector(configuration: RepCountingConfiguration) -> any PeakDetector {

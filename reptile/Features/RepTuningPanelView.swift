@@ -52,9 +52,10 @@ final class RepTuningPanelView: UIView {
         return scrollView
     }()
 
-    private let depthRow = TuningSliderRow(title: "Squat depth", min: 0.45, max: 0.90, format: "%.0f%%", displayScale: 100)
-    private let lockoutRow = TuningSliderRow(title: "Lockout threshold", min: 0.02, max: 0.25, format: "%.0f%%", displayScale: 100)
-    private let descentEntryRow = TuningSliderRow(title: "Descent trigger", min: 0.05, max: 0.35, format: "%.0f%%", displayScale: 100)
+    private let kneeBottomRow = TuningSliderRow(title: "Knee bottom flexion", min: 45, max: 130, format: "%.0f°")
+    private let hipBottomRow = TuningSliderRow(title: "Hip bottom flexion", min: 30, max: 120, format: "%.0f°")
+    private let kneeLockoutRow = TuningSliderRow(title: "Knee lockout max", min: 0, max: 45, format: "%.0f°")
+    private let hipLockoutRow = TuningSliderRow(title: "Hip lockout max", min: 0, max: 50, format: "%.0f°")
     private let minAmplitudeRow = TuningSliderRow(title: "Min range of motion", min: 0.05, max: 0.55, format: "%.0f%%", displayScale: 100)
     private let minTimeRow = TuningSliderRow(title: "Min time between reps", min: 0.20, max: 1.80, format: "%.1fs")
 
@@ -89,9 +90,10 @@ final class RepTuningPanelView: UIView {
         header.alignment = .center
         header.translatesAutoresizingMaskIntoConstraints = false
 
-        stackView.addArrangedSubview(depthRow)
-        stackView.addArrangedSubview(lockoutRow)
-        stackView.addArrangedSubview(descentEntryRow)
+        stackView.addArrangedSubview(kneeBottomRow)
+        stackView.addArrangedSubview(hipBottomRow)
+        stackView.addArrangedSubview(kneeLockoutRow)
+        stackView.addArrangedSubview(hipLockoutRow)
         stackView.addArrangedSubview(minAmplitudeRow)
         stackView.addArrangedSubview(minTimeRow)
         stackView.translatesAutoresizingMaskIntoConstraints = false
@@ -122,14 +124,17 @@ final class RepTuningPanelView: UIView {
     private func wireEvents() {
         resetButton.addTarget(self, action: #selector(resetTapped), for: .touchUpInside)
 
-        depthRow.onValueChanged = { [weak self] value in
-            self?.update { $0.downThreshold = CGFloat(value) }
+        kneeBottomRow.onValueChanged = { [weak self] value in
+            self?.update { $0.squatKneeBottomFlexionDegrees = CGFloat(value) }
         }
-        lockoutRow.onValueChanged = { [weak self] value in
-            self?.update { $0.squatStandLockoutThreshold = CGFloat(value) }
+        hipBottomRow.onValueChanged = { [weak self] value in
+            self?.update { $0.squatHipBottomFlexionDegrees = CGFloat(value) }
         }
-        descentEntryRow.onValueChanged = { [weak self] value in
-            self?.update { $0.squatDescendEntryThreshold = CGFloat(value) }
+        kneeLockoutRow.onValueChanged = { [weak self] value in
+            self?.update { $0.squatKneeLockoutFlexionDegrees = CGFloat(value) }
+        }
+        hipLockoutRow.onValueChanged = { [weak self] value in
+            self?.update { $0.squatHipLockoutFlexionDegrees = CGFloat(value) }
         }
         minAmplitudeRow.onValueChanged = { [weak self] value in
             self?.update { $0.minAmplitude = CGFloat(value) }
@@ -138,7 +143,7 @@ final class RepTuningPanelView: UIView {
             self?.update { $0.minTimeBetweenReps = Double(value) }
         }
 
-        let rows = [depthRow, lockoutRow, descentEntryRow, minAmplitudeRow, minTimeRow]
+        let rows = [kneeBottomRow, hipBottomRow, kneeLockoutRow, hipLockoutRow, minAmplitudeRow, minTimeRow]
         for row in rows {
             row.onInteractionChanged = { [weak self] isInteracting in
                 self?.handleRowInteractionChanged(isInteracting)
@@ -172,9 +177,10 @@ final class RepTuningPanelView: UIView {
     }
 
     private func syncRows() {
-        depthRow.setValue(Float(configuration.downThreshold))
-        lockoutRow.setValue(Float(configuration.squatStandLockoutThreshold))
-        descentEntryRow.setValue(Float(configuration.squatDescendEntryThreshold))
+        kneeBottomRow.setValue(Float(configuration.squatKneeBottomFlexionDegrees))
+        hipBottomRow.setValue(Float(configuration.squatHipBottomFlexionDegrees))
+        kneeLockoutRow.setValue(Float(configuration.squatKneeLockoutFlexionDegrees))
+        hipLockoutRow.setValue(Float(configuration.squatHipLockoutFlexionDegrees))
         minAmplitudeRow.setValue(Float(configuration.minAmplitude))
         minTimeRow.setValue(Float(configuration.minTimeBetweenReps))
     }

@@ -10,7 +10,7 @@ import UIKit
 import QuartzCore
 
 final class LiveCameraViewController: UIViewController {
-    private static let tuningStorageKey = "repTuning.v3"
+    private static let tuningStorageKey = "repTuning.v4"
 
     private let previewView = CameraPreviewView()
     private let repCountLabel = UILabel()
@@ -256,6 +256,11 @@ final class LiveCameraViewController: UIViewController {
             "downThreshold": Double(configuration.downThreshold),
             "squatDescendEntryThreshold": Double(configuration.squatDescendEntryThreshold),
             "squatStandLockoutThreshold": Double(configuration.squatStandLockoutThreshold),
+            "squatKneeBottomFlexionDegrees": Double(configuration.squatKneeBottomFlexionDegrees),
+            "squatHipBottomFlexionDegrees": Double(configuration.squatHipBottomFlexionDegrees),
+            "squatKneeLockoutFlexionDegrees": Double(configuration.squatKneeLockoutFlexionDegrees),
+            "squatHipLockoutFlexionDegrees": Double(configuration.squatHipLockoutFlexionDegrees),
+            "squatMaxSideAsymmetryDegrees": Double(configuration.squatMaxSideAsymmetryDegrees),
             "inactivityResetSeconds": configuration.inactivityResetSeconds,
             "activityDeltaThreshold": Double(configuration.activityDeltaThreshold),
             "spikeMaxDelta": Double(configuration.spikeMaxDelta),
@@ -289,6 +294,21 @@ final class LiveCameraViewController: UIViewController {
         let squatStandLockoutThreshold =
             (values["squatStandLockoutThreshold"] as? Double)
             ?? Double(LiveCameraCoordinator.defaultRepTuning.squatStandLockoutThreshold)
+        let squatKneeBottomFlexionDegrees =
+            (values["squatKneeBottomFlexionDegrees"] as? Double)
+            ?? Double(LiveCameraCoordinator.defaultRepTuning.squatKneeBottomFlexionDegrees)
+        let squatHipBottomFlexionDegrees =
+            (values["squatHipBottomFlexionDegrees"] as? Double)
+            ?? Double(LiveCameraCoordinator.defaultRepTuning.squatHipBottomFlexionDegrees)
+        let squatKneeLockoutFlexionDegrees =
+            (values["squatKneeLockoutFlexionDegrees"] as? Double)
+            ?? Double(LiveCameraCoordinator.defaultRepTuning.squatKneeLockoutFlexionDegrees)
+        let squatHipLockoutFlexionDegrees =
+            (values["squatHipLockoutFlexionDegrees"] as? Double)
+            ?? Double(LiveCameraCoordinator.defaultRepTuning.squatHipLockoutFlexionDegrees)
+        let squatMaxSideAsymmetryDegrees =
+            (values["squatMaxSideAsymmetryDegrees"] as? Double)
+            ?? Double(LiveCameraCoordinator.defaultRepTuning.squatMaxSideAsymmetryDegrees)
 
         return RepCountingConfiguration(
             armingThreshold: CGFloat(armingThreshold),
@@ -302,6 +322,11 @@ final class LiveCameraViewController: UIViewController {
             downThreshold: CGFloat(downThreshold),
             squatDescendEntryThreshold: CGFloat(squatDescendEntryThreshold),
             squatStandLockoutThreshold: CGFloat(squatStandLockoutThreshold),
+            squatKneeBottomFlexionDegrees: CGFloat(squatKneeBottomFlexionDegrees),
+            squatHipBottomFlexionDegrees: CGFloat(squatHipBottomFlexionDegrees),
+            squatKneeLockoutFlexionDegrees: CGFloat(squatKneeLockoutFlexionDegrees),
+            squatHipLockoutFlexionDegrees: CGFloat(squatHipLockoutFlexionDegrees),
+            squatMaxSideAsymmetryDegrees: CGFloat(squatMaxSideAsymmetryDegrees),
             inactivityResetSeconds: inactivityResetSeconds,
             activityDeltaThreshold: CGFloat(activityDeltaThreshold),
             spikeMaxDelta: CGFloat(spikeMaxDelta),

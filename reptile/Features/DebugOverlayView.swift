@@ -18,12 +18,26 @@ final class DebugOverlayView: UIView {
     private var bottomThreshold: CGFloat = 0.62
     private var standLockoutThreshold: CGFloat = 0.10
     private var minAmplitude: CGFloat = 0.18
+    private var kneeBottomFlexionDegrees: CGFloat = 80
+    private var hipBottomFlexionDegrees: CGFloat = 60
+    private var kneeLockoutFlexionDegrees: CGFloat = 18
+    private var hipLockoutFlexionDegrees: CGFloat = 20
+    private var currentKneeFlexionDegrees: CGFloat?
+    private var currentHipFlexionDegrees: CGFloat?
+    private var leftKneeFlexionDegrees: CGFloat?
+    private var rightKneeFlexionDegrees: CGFloat?
+    private var leftHipFlexionDegrees: CGFloat?
+    private var rightHipFlexionDegrees: CGFloat?
 
     func updateConfiguration(_ configuration: RepCountingConfiguration) {
         descendEntryThreshold = configuration.squatDescendEntryThreshold
         bottomThreshold = configuration.downThreshold
         standLockoutThreshold = configuration.squatStandLockoutThreshold
         minAmplitude = configuration.minAmplitude
+        kneeBottomFlexionDegrees = configuration.squatKneeBottomFlexionDegrees
+        hipBottomFlexionDegrees = configuration.squatHipBottomFlexionDegrees
+        kneeLockoutFlexionDegrees = configuration.squatKneeLockoutFlexionDegrees
+        hipLockoutFlexionDegrees = configuration.squatHipLockoutFlexionDegrees
         setNeedsDisplay()
     }
 
@@ -37,6 +51,12 @@ final class DebugOverlayView: UIView {
         stateName = output.state.rawValue
         jointCount = output.poseFrame.joints.count
         trackedJointName = formatTrackedJoints(output.trackedJoints)
+        currentKneeFlexionDegrees = output.squatFlexionMetrics?.kneeFlexionDegrees
+        currentHipFlexionDegrees = output.squatFlexionMetrics?.hipFlexionDegrees
+        leftKneeFlexionDegrees = output.squatFlexionMetrics?.leftKneeFlexionDegrees
+        rightKneeFlexionDegrees = output.squatFlexionMetrics?.rightKneeFlexionDegrees
+        leftHipFlexionDegrees = output.squatFlexionMetrics?.leftHipFlexionDegrees
+        rightHipFlexionDegrees = output.squatFlexionMetrics?.rightHipFlexionDegrees
         setNeedsDisplay()
     }
 
@@ -134,18 +154,29 @@ final class DebugOverlayView: UIView {
 
     private func drawStats(in rect: CGRect) {
         let metricStr = currentMetric.map { String(format: "%.2f", $0) } ?? "--"
-        let text = "metric: \(metricStr)   state: \(stateName)   tracked: \(trackedJointName)   joints: \(jointCount)   reps: \(repCount)   amp: \(String(format: "%.2f", minAmplitude))"
+        let kneeCurrent = currentKneeFlexionDegrees.map { String(format: "%.0f", $0) } ?? "--"
+        let hipCurrent = currentHipFlexionDegrees.map { String(format: "%.0f", $0) } ?? "--"
+        let kneePair = "L\(formatOptionalDegrees(leftKneeFlexionDegrees))/R\(formatOptionalDegrees(rightKneeFlexionDegrees))"
+        let hipPair = "L\(formatOptionalDegrees(leftHipFlexionDegrees))/R\(formatOptionalDegrees(rightHipFlexionDegrees))"
+        let text = "metric: \(metricStr)   state: \(stateName)   reps: \(repCount)   tracked: \(trackedJointName)   joints: \(jointCount)\n" +
+                   "knee: \(kneeCurrent)° (\(kneePair))  hip: \(hipCurrent)° (\(hipPair))\n" +
+                   "bottom>= knee \(String(format: "%.0f", kneeBottomFlexionDegrees))° / hip \(String(format: "%.0f", hipBottomFlexionDegrees))°   lockout<= knee \(String(format: "%.0f", kneeLockoutFlexionDegrees))° / hip \(String(format: "%.0f", hipLockoutFlexionDegrees))°   amp: \(String(format: "%.2f", minAmplitude))"
         let attrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: UIColor.white,
-            .font: UIFont.systemFont(ofSize: 13, weight: .regular),
+            .font: UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),
         ]
         let str = NSAttributedString(string: text, attributes: attrs)
-        let size = str.size()
+        let maxBounds = CGSize(width: rect.width - 20, height: rect.height - 6)
+        let size = str.boundingRect(with: maxBounds, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil).size
         let origin = CGPoint(
             x: rect.minX + (rect.width - size.width) / 2,
             y: rect.minY + (rect.height - size.height) / 2
         )
-        str.draw(at: origin)
+        str.draw(with: CGRect(origin: origin, size: maxBounds), options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+    }
+
+    private func formatOptionalDegrees(_ value: CGFloat?) -> String {
+        value.map { String(format: "%.0f°", $0) } ?? "--"
     }
 
     private func formatTrackedJoints(_ joints: [VNHumanBodyPose3DObservation.JointName]) -> String {
