@@ -7,13 +7,17 @@ import Vision
 
 @MainActor
 final class LiveCameraCoordinator {
-    static let defaultRepTuning = RepCountingConfiguration(
+    nonisolated static let defaultRepTuning = RepCountingConfiguration(
         armingThreshold: 0.5,
         minPeakHeight: 0.08,
         minValleyDepth: 0.08,
         peakWindowSize: 5,
-        minTimeBetweenReps: 0.5,
-        minAmplitude: 0.15,
+        minTimeBetweenReps: 0.6,
+        minAmplitude: 0.18,
+        upThreshold: 0.20,
+        downThreshold: 0.62,
+        squatDescendEntryThreshold: 0.12,
+        squatStandLockoutThreshold: 0.10,
         inactivityResetSeconds: 3.0,
         activityDeltaThreshold: 0.015,
         spikeMaxDelta: 0.25,

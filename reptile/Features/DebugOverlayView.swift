@@ -9,21 +9,20 @@ import Vision
 
 final class DebugOverlayView: UIView {
     private var history: [CGFloat] = []
-    private var currentMetric: CGFloat = 0
-    private var runningMax: CGFloat = 0
+    private var currentMetric: CGFloat? = nil
     private var repCount: Int = 0
     private var stateName: String = "--"
     private var jointCount: Int = 0
     private var trackedJointName: String = "--"
-    private var upThreshold: CGFloat = 0.6
-    private var armingThreshold: CGFloat = 0.5
-    private var downThreshold: CGFloat = 0.3
-    private var minAmplitude: CGFloat = 0.15
+    private var descendEntryThreshold: CGFloat = 0.12
+    private var bottomThreshold: CGFloat = 0.62
+    private var standLockoutThreshold: CGFloat = 0.10
+    private var minAmplitude: CGFloat = 0.18
 
     func updateConfiguration(_ configuration: RepCountingConfiguration) {
-        upThreshold = configuration.upThreshold
-        armingThreshold = configuration.armingThreshold
-        downThreshold = configuration.downThreshold
+        descendEntryThreshold = configuration.squatDescendEntryThreshold
+        bottomThreshold = configuration.downThreshold
+        standLockoutThreshold = configuration.squatStandLockoutThreshold
         minAmplitude = configuration.minAmplitude
         setNeedsDisplay()
     }
@@ -34,7 +33,6 @@ final class DebugOverlayView: UIView {
             history.append(m)
             if history.count > 150 { history.removeFirst() }
         }
-        runningMax = output.runningMax
         repCount = output.repCount
         stateName = output.state.rawValue
         jointCount = output.poseFrame.joints.count
@@ -69,10 +67,9 @@ final class DebugOverlayView: UIView {
 
     private func drawThresholds(in rect: CGRect, ctx: CGContext) {
         let thresholds: [(value: CGFloat, color: UIColor, label: String)] = [
-            (upThreshold, .systemGreen, "up"),
-            (armingThreshold, .systemOrange, "arm"),
-            (downThreshold, .systemRed, "down"),
-            (max(0, runningMax - minAmplitude), .systemYellow, "trigger"),
+            (standLockoutThreshold, .systemGreen, "lockout"),
+            (descendEntryThreshold, .systemOrange, "entry"),
+            (bottomThreshold, .systemRed, "bottom"),
         ]
 
         let dash: [CGFloat] = [6, 4]
@@ -136,8 +133,8 @@ final class DebugOverlayView: UIView {
     }
 
     private func drawStats(in rect: CGRect) {
-        let text = String(format: "metric: %.2f   state: %@   tracked: %@   joints: %d   reps: %d",
-                          currentMetric, stateName, trackedJointName, jointCount, repCount)
+        let metricStr = currentMetric.map { String(format: "%.2f", $0) } ?? "--"
+        let text = "metric: \(metricStr)   state: \(stateName)   tracked: \(trackedJointName)   joints: \(jointCount)   reps: \(repCount)   amp: \(String(format: "%.2f", minAmplitude))"
         let attrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: UIColor.white,
             .font: UIFont.systemFont(ofSize: 13, weight: .regular),
@@ -161,13 +158,19 @@ final class DebugOverlayView: UIView {
         switch joint {
         case .root: return "root"
         case .spine: return "spine"
-        case .leftHip: return "leftHip"
-        case .rightHip: return "rightHip"
-        case .leftShoulder: return "leftShoulder"
-        case .rightShoulder: return "rightShoulder"
-        case .leftWrist: return "leftWrist"
-        case .rightWrist: return "rightWrist"
-        default: return String(describing: joint)
+        case .leftHip: return "lHip"
+        case .rightHip: return "rHip"
+        case .leftShoulder: return "lShldr"
+        case .rightShoulder: return "rShldr"
+        case .leftKnee: return "lKnee"
+        case .rightKnee: return "rKnee"
+        case .leftAnkle: return "lAnkle"
+        case .rightAnkle: return "rAnkle"
+        case .leftWrist: return "lWrist"
+        case .rightWrist: return "rWrist"
+        case .leftElbow: return "lElbow"
+        case .rightElbow: return "rElbow"
+        default: return String(describing: joint.rawValue)
         }
     }
 }

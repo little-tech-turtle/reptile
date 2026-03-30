@@ -24,6 +24,44 @@ private func feedDetector(_ detector: inout LocalExtremaPeakDetector, values: [C
     }
 }
 
+private func makeFrame(
+    _ joints: [VNHumanBodyPose3DObservation.JointName: CameraKit.NormalizedPoint] = [:],
+    positions3D: [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>] = [:]
+) -> PoseFrame {
+    PoseFrame(
+        timestamp: CMTime(seconds: 0, preferredTimescale: 600),
+        joints: joints,
+        positions3D: positions3D
+    )
+}
+
+/// Builds synthetic 3D joint positions for a squat at the given normalised depth.
+///
+/// `squatDepth` 0 = standing, 1 = deep squat. `cameraZ` is the person's depth
+/// in camera space (metres) — changing it should NOT affect the metric.
+private func squat3DPositions(
+    squatDepth: CGFloat,
+    cameraZ: Float = 2.0
+) -> [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>] {
+    let d = Float(max(0, min(1, squatDepth)))
+    // Camera is at ~1.1 m height. Y is positive upward in Vision portrait space.
+    let shoulderY: Float =  0.40 - 0.20 * d   // shoulder dips ~0.20 m in a deep squat
+    let hipY:      Float = -0.10 - 0.50 * d   // hip descends ~0.50 m
+    let kneeY:     Float = -0.55 - 0.10 * d
+    let ankleY:    Float = -0.90
+
+    return [
+        .leftShoulder:  SIMD3(x: -0.20, y: shoulderY, z: cameraZ),
+        .rightShoulder: SIMD3(x:  0.20, y: shoulderY, z: cameraZ),
+        .leftHip:       SIMD3(x: -0.15, y: hipY,      z: cameraZ),
+        .rightHip:      SIMD3(x:  0.15, y: hipY,      z: cameraZ),
+        .leftKnee:      SIMD3(x: -0.15, y: kneeY,     z: cameraZ),
+        .rightKnee:     SIMD3(x:  0.15, y: kneeY,     z: cameraZ),
+        .leftAnkle:     SIMD3(x: -0.12, y: ankleY,    z: cameraZ),
+        .rightAnkle:    SIMD3(x:  0.12, y: ankleY,    z: cameraZ),
+    ]
+}
+
 // MARK: - LocalExtremaPeakDetector
 
 @Test func peakDetector_detectsCleanMaximum() {
@@ -393,10 +431,10 @@ private func motionJoints(
     ]
 
     for joints in frames {
-        _ = calculator.calculate(from: joints)
+        _ = calculator.calculate(from: makeFrame(joints))
     }
 
-    #expect(calculator.trackedJoints(from: frames.last!) == [VNHumanBodyPose3DObservation.JointName.rightWrist])
+    #expect(calculator.trackedJoints(from: makeFrame(frames.last!)) == [VNHumanBodyPose3DObservation.JointName.rightWrist])
 }
 
 @Test func adaptiveCalculator_doesNotSwitchOnSingleFrameSpike() {
@@ -413,13 +451,13 @@ private func motionJoints(
     ]
 
     for joints in primeFrames {
-        _ = calculator.calculate(from: joints)
+        _ = calculator.calculate(from: makeFrame(joints))
     }
-    #expect(calculator.trackedJoints(from: primeFrames.last!) == [VNHumanBodyPose3DObservation.JointName.rightWrist])
+    #expect(calculator.trackedJoints(from: makeFrame(primeFrames.last!)) == [VNHumanBodyPose3DObservation.JointName.rightWrist])
 
     let spikeFrame = motionJoints(leftWristX: 0.95, rightWristX: 0.80)
-    _ = calculator.calculate(from: spikeFrame)
-    #expect(calculator.trackedJoints(from: spikeFrame) == [VNHumanBodyPose3DObservation.JointName.rightWrist])
+    _ = calculator.calculate(from: makeFrame(spikeFrame))
+    #expect(calculator.trackedJoints(from: makeFrame(spikeFrame)) == [VNHumanBodyPose3DObservation.JointName.rightWrist])
 }
 
 @Test func adaptiveCalculator_switchesAfterSustainedStrongerMotion() {
@@ -435,9 +473,9 @@ private func motionJoints(
         motionJoints(rightWristX: 0.78),
     ]
     for joints in rightDominant {
-        _ = calculator.calculate(from: joints)
+        _ = calculator.calculate(from: makeFrame(joints))
     }
-    #expect(calculator.trackedJoints(from: rightDominant.last!) == [VNHumanBodyPose3DObservation.JointName.rightWrist])
+    #expect(calculator.trackedJoints(from: makeFrame(rightDominant.last!)) == [VNHumanBodyPose3DObservation.JointName.rightWrist])
 
     let leftDominant: [[VNHumanBodyPose3DObservation.JointName: CameraKit.NormalizedPoint]] = [
         motionJoints(leftWristX: 0.10, rightWristX: 0.78),
@@ -446,10 +484,10 @@ private func motionJoints(
         motionJoints(leftWristX: 0.85, rightWristX: 0.78),
     ]
     for joints in leftDominant {
-        _ = calculator.calculate(from: joints)
+        _ = calculator.calculate(from: makeFrame(joints))
     }
 
-    #expect(calculator.trackedJoints(from: leftDominant.last!) == [VNHumanBodyPose3DObservation.JointName.leftWrist])
+    #expect(calculator.trackedJoints(from: makeFrame(leftDominant.last!)) == [VNHumanBodyPose3DObservation.JointName.leftWrist])
 }
 
 @Test func distanceFromFloor_verticalMovementChangesMetric() {
@@ -462,8 +500,8 @@ private func motionJoints(
         .root: CameraKit.NormalizedPoint(x: 0.80, y: 0.50),
     ]
 
-    let standingMetric = calculator.calculate(from: standing)
-    let crouchedMetric = calculator.calculate(from: crouched)
+    let standingMetric = calculator.calculate(from: makeFrame(standing))
+    let crouchedMetric = calculator.calculate(from: makeFrame(crouched))
 
     #expect(standingMetric != nil)
     #expect(crouchedMetric != nil)
@@ -480,8 +518,8 @@ private func motionJoints(
         .root: CameraKit.NormalizedPoint(x: 0.35, y: 0.90),
     ]
 
-    let leftMetric = calculator.calculate(from: leftSide)
-    let rightMetric = calculator.calculate(from: rightSide)
+    let leftMetric = calculator.calculate(from: makeFrame(leftSide))
+    let rightMetric = calculator.calculate(from: makeFrame(rightSide))
 
     #expect(leftMetric != nil)
     #expect(rightMetric != nil)
@@ -496,7 +534,7 @@ private func motionJoints(
         .rightHip: CameraKit.NormalizedPoint(x: 0.45, y: 0.45),
     ]
 
-    let tracked = calculator.trackedJoints(from: joints)
+    let tracked = calculator.trackedJoints(from: makeFrame(joints))
     #expect(tracked == [VNHumanBodyPose3DObservation.JointName.root])
 }
 
@@ -507,9 +545,421 @@ private func motionJoints(
         .rightHip: CameraKit.NormalizedPoint(x: 0.45, y: 0.45),
     ]
 
-    let tracked = Set(calculator.trackedJoints(from: joints))
+    let tracked = Set(calculator.trackedJoints(from: makeFrame(joints)))
     let expected: Set<VNHumanBodyPose3DObservation.JointName> = [.leftHip, .rightHip]
     #expect(tracked == expected)
+}
+
+// MARK: - Squat profile
+
+private func squatJoints(
+    depth: CGFloat,
+    missingKnees: Bool = false,
+    hipSkew: CGFloat = 0
+) -> [VNHumanBodyPose3DObservation.JointName: CameraKit.NormalizedPoint] {
+    let d = max(0, min(1, depth))
+    let shoulderX: CGFloat = 0.20
+    let ankleX: CGFloat = 0.90
+    let hipX: CGFloat = 0.52 + 0.24 * d
+    let kneeX: CGFloat = 0.62 + 0.10 * d
+
+    var joints: [VNHumanBodyPose3DObservation.JointName: CameraKit.NormalizedPoint] = [
+        .leftShoulder: CameraKit.NormalizedPoint(x: shoulderX, y: 0.36),
+        .rightShoulder: CameraKit.NormalizedPoint(x: shoulderX, y: 0.64),
+        .leftHip: CameraKit.NormalizedPoint(x: hipX + hipSkew, y: 0.42),
+        .rightHip: CameraKit.NormalizedPoint(x: hipX - hipSkew, y: 0.58),
+        .leftAnkle: CameraKit.NormalizedPoint(x: ankleX, y: 0.46),
+        .rightAnkle: CameraKit.NormalizedPoint(x: ankleX, y: 0.54),
+    ]
+
+    if !missingKnees {
+        joints[.leftKnee] = CameraKit.NormalizedPoint(x: kneeX, y: 0.44)
+        joints[.rightKnee] = CameraKit.NormalizedPoint(x: kneeX, y: 0.56)
+    }
+
+    return joints
+}
+
+private func offsetCameraJoints(depth d: CGFloat) -> [VNHumanBodyPose3DObservation.JointName: CameraKit.NormalizedPoint] {
+    let d = max(0, min(1, d))
+    let shoulderX: CGFloat = 0.15
+    let kneeX: CGFloat = 0.45 + 0.12 * d
+    let hipX: CGFloat = 0.35 + 0.18 * d
+    return [
+        .leftShoulder:  CameraKit.NormalizedPoint(x: shoulderX, y: 0.35),
+        .rightShoulder: CameraKit.NormalizedPoint(x: shoulderX, y: 0.65),
+        .leftHip:       CameraKit.NormalizedPoint(x: hipX, y: 0.42),
+        .rightHip:      CameraKit.NormalizedPoint(x: hipX, y: 0.58),
+        .leftKnee:      CameraKit.NormalizedPoint(x: kneeX, y: 0.40),
+        .rightKnee:     CameraKit.NormalizedPoint(x: kneeX, y: 0.60),
+    ]
+}
+
+private func feedSquatCounter(
+    _ counter: inout SquatPhaseRepCounter,
+    values: [CGFloat],
+    startSeconds: Double = 0,
+    stepSeconds: Double = 0.1
+) {
+    for (index, value) in values.enumerated() {
+        let timestamp = CMTime(seconds: startSeconds + Double(index) * stepSeconds, preferredTimescale: 600)
+        counter.ingestSample(timestamp: timestamp, metricValue: value)
+    }
+}
+
+@Test func squatMetric_computesWithKneesButNoAnkles() {
+    let calculator = SquatDepthMetricCalculator()
+
+    var standing = squatJoints(depth: 0.0)
+    standing.removeValue(forKey: .leftAnkle)
+    standing.removeValue(forKey: .rightAnkle)
+    let standingMetric = calculator.calculate(from: makeFrame(standing))
+    #expect(standingMetric != nil)
+    #expect(standingMetric! < 0.15)
+
+    var deep = squatJoints(depth: 0.9)
+    deep.removeValue(forKey: .leftAnkle)
+    deep.removeValue(forKey: .rightAnkle)
+    let deepMetric = calculator.calculate(from: makeFrame(deep))
+    #expect(deepMetric != nil)
+    #expect(deepMetric! > 0.62)
+    #expect(deepMetric! > standingMetric!)
+}
+
+@Test func squatMetric_returnsNilWithNeitherAnklesNorKnees() {
+    let calculator = SquatDepthMetricCalculator()
+    var joints = squatJoints(depth: 0.5)
+    joints.removeValue(forKey: .leftAnkle)
+    joints.removeValue(forKey: .rightAnkle)
+    joints.removeValue(forKey: .leftKnee)
+    joints.removeValue(forKey: .rightKnee)
+    #expect(calculator.calculate(from: makeFrame(joints)) == nil)
+}
+
+@Test func squatMetric_adaptiveNormalizationWorksWithOffsetCamera() {
+    let calculator = SquatDepthMetricCalculator()
+    for _ in 0..<30 { _ = calculator.calculate(from: makeFrame(offsetCameraJoints(depth: 0.0))) }
+    for _ in 0..<30 { _ = calculator.calculate(from: makeFrame(offsetCameraJoints(depth: 1.0))) }
+    let standingMetric = calculator.calculate(from: makeFrame(offsetCameraJoints(depth: 0.0)))
+    let deepMetric = calculator.calculate(from: makeFrame(offsetCameraJoints(depth: 1.0)))
+    #expect(standingMetric != nil)
+    #expect(deepMetric != nil)
+    #expect(standingMetric! < 0.20)
+    #expect(deepMetric! > 0.62)
+    #expect(deepMetric! > standingMetric!)
+}
+
+@Test func squatMetric_increasesWithDepth() {
+    let calculator = SquatDepthMetricCalculator(hipWeight: 1, kneeWeight: 0)
+
+    let standing = calculator.calculate(from: makeFrame(squatJoints(depth: 0.05)))
+    let deep = calculator.calculate(from: makeFrame(squatJoints(depth: 0.95)))
+
+    #expect(standing != nil)
+    #expect(deep != nil)
+    #expect(deep! > standing!)
+}
+
+@Test func squatMetric_handlesMissingKneesUsingHipDepth() {
+    let calculator = SquatDepthMetricCalculator(hipWeight: 1, kneeWeight: 0)
+    let metric = calculator.calculate(from: makeFrame(squatJoints(depth: 0.6, missingKnees: true)))
+    #expect(metric != nil)
+}
+
+@Test func squatMetric_rejectsLargeHipAsymmetry() {
+    let calculator = SquatDepthMetricCalculator(maxHipSymmetryDelta: 0.05)
+    let metric = calculator.calculate(from: makeFrame(squatJoints(depth: 0.6, hipSkew: 0.08)))
+    #expect(metric == nil)
+}
+
+@Test func squatCounter_countsOneFullCycle() {
+    var counter = SquatPhaseRepCounter(minTimeBetweenReps: 0.4, minAmplitude: 0.15)
+    let values: [CGFloat] = [0.05, 0.14, 0.24, 0.46, 0.66, 0.72, 0.56, 0.39, 0.20, 0.09, 0.05]
+
+    feedSquatCounter(&counter, values: values)
+
+    #expect(counter.count == 1)
+    #expect(counter.state == .up)
+}
+
+@Test func squatCounter_doesNotCountPartialDepthCycle() {
+    var counter = SquatPhaseRepCounter(minTimeBetweenReps: 0.4, minAmplitude: 0.15)
+    let values: [CGFloat] = [0.05, 0.13, 0.23, 0.31, 0.39, 0.30, 0.19, 0.11, 0.05]
+
+    feedSquatCounter(&counter, values: values)
+
+    #expect(counter.count == 0)
+}
+
+@Test func squatCounter_bottomBounceCountsOnce() {
+    var counter = SquatPhaseRepCounter(minTimeBetweenReps: 0.4, minAmplitude: 0.15)
+    let values: [CGFloat] = [0.05, 0.15, 0.29, 0.50, 0.66, 0.73, 0.68, 0.74, 0.62, 0.51, 0.34, 0.18, 0.08]
+
+    feedSquatCounter(&counter, values: values)
+
+    #expect(counter.count == 1)
+}
+
+@Test func squatCounter_needsNewCycleForSecondRep() {
+    var counter = SquatPhaseRepCounter(minTimeBetweenReps: 0.4, minAmplitude: 0.15)
+    let first: [CGFloat] = [0.05, 0.16, 0.31, 0.54, 0.68, 0.71, 0.55, 0.37, 0.19, 0.08]
+    let extraBottomMotion: [CGFloat] = [0.12, 0.48, 0.69, 0.62, 0.46]
+
+    feedSquatCounter(&counter, values: first, startSeconds: 0)
+    feedSquatCounter(&counter, values: extraBottomMotion, startSeconds: 1.2)
+
+    #expect(counter.count == 1)
+}
+
+@Test func squatCounter_tuningCanRequireDeeperBottom() {
+    var counter = SquatPhaseRepCounter(minTimeBetweenReps: 0.4, minAmplitude: 0.15)
+    let values: [CGFloat] = [0.05, 0.14, 0.24, 0.46, 0.66, 0.72, 0.56, 0.39, 0.20, 0.09, 0.05]
+
+    counter.updateTuning(
+        RepCounterTuning(
+            minTimeBetweenReps: 0.4,
+            minAmplitude: 0.15,
+            upThreshold: 0.2,
+            downThreshold: 0.75,
+            inactivityResetSeconds: 3,
+            activityDeltaThreshold: 0.015,
+            squatDescendEntryThreshold: 0.12,
+            squatStandLockoutThreshold: 0.10
+        )
+    )
+
+    feedSquatCounter(&counter, values: values)
+
+    #expect(counter.count == 0)
+}
+
+@Test func squatCounter_tuningCanRequireFullerLockout() {
+    var counter = SquatPhaseRepCounter(minTimeBetweenReps: 0.4, minAmplitude: 0.15)
+    let values: [CGFloat] = [0.05, 0.14, 0.24, 0.46, 0.66, 0.72, 0.56, 0.39, 0.20, 0.09, 0.05]
+
+    counter.updateTuning(
+        RepCounterTuning(
+            minTimeBetweenReps: 0.4,
+            minAmplitude: 0.15,
+            upThreshold: 0.2,
+            downThreshold: 0.62,
+            inactivityResetSeconds: 3,
+            activityDeltaThreshold: 0.015,
+            squatDescendEntryThreshold: 0.12,
+            squatStandLockoutThreshold: 0.04
+        )
+    )
+
+    feedSquatCounter(&counter, values: values)
+
+    #expect(counter.count == 0)
+}
+
+@Test func squatCounter_tuningMinRepTimeBlocksFastSecondRep() {
+    var counter = SquatPhaseRepCounter(minTimeBetweenReps: 0.4, minAmplitude: 0.15)
+    let fastDoubleRep: [CGFloat] = [
+        0.05, 0.14, 0.24, 0.46, 0.66, 0.72, 0.56, 0.39, 0.20, 0.09, 0.05,
+        0.14, 0.24, 0.46, 0.66, 0.72, 0.56, 0.39, 0.20, 0.09, 0.05,
+    ]
+
+    counter.updateTuning(
+        RepCounterTuning(
+            minTimeBetweenReps: 1.6,
+            minAmplitude: 0.15,
+            upThreshold: 0.2,
+            downThreshold: 0.62,
+            inactivityResetSeconds: 3,
+            activityDeltaThreshold: 0.015,
+            squatDescendEntryThreshold: 0.12,
+            squatStandLockoutThreshold: 0.10
+        )
+    )
+
+    feedSquatCounter(&counter, values: fastDoubleRep)
+
+    #expect(counter.count == 1)
+}
+
+@Test func squatExerciseProfile_usesConfiguredDepthThreshold() {
+    let profile = SquatExerciseProfile()
+    let configuration = RepCountingConfiguration(
+        minTimeBetweenReps: 0.4,
+        minAmplitude: 0.15,
+        downThreshold: 0.75,
+        squatDescendEntryThreshold: 0.12,
+        squatStandLockoutThreshold: 0.10
+    )
+
+    let candidate = profile.makeRepCounter(configuration: configuration)
+    #expect(candidate is SquatPhaseRepCounter)
+
+    guard var counter = candidate as? SquatPhaseRepCounter else {
+        Issue.record("Expected SquatPhaseRepCounter from squat profile")
+        return
+    }
+
+    let values: [CGFloat] = [0.05, 0.14, 0.24, 0.46, 0.66, 0.72, 0.56, 0.39, 0.20, 0.09, 0.05]
+    feedSquatCounter(&counter, values: values)
+    #expect(counter.count == 0)
+}
+
+@Test func squatCounter_countsThreeConsecutiveReps() {
+    var counter = SquatPhaseRepCounter(minTimeBetweenReps: 0.4, minAmplitude: 0.15)
+    let cycle: [CGFloat] = [0.05, 0.14, 0.24, 0.46, 0.66, 0.72, 0.56, 0.39, 0.20, 0.09, 0.05]
+    feedSquatCounter(&counter, values: cycle, startSeconds: 0.0)
+    feedSquatCounter(&counter, values: cycle, startSeconds: 1.5)
+    feedSquatCounter(&counter, values: cycle, startSeconds: 3.0)
+    #expect(counter.count == 3)
+}
+
+@Test func squatMetric_standingPositionIsNearZero() {
+    let calculator = SquatDepthMetricCalculator(hipWeight: 1, kneeWeight: 0)
+    let metric = calculator.calculate(from: makeFrame(squatJoints(depth: 0.0)))
+    #expect(metric != nil)
+    #expect(metric! < 0.15)
+}
+
+@Test func squatMetric_deepSquatIsNearOne() {
+    let calculator = SquatDepthMetricCalculator(hipWeight: 1, kneeWeight: 0)
+    let metric = calculator.calculate(from: makeFrame(squatJoints(depth: 1.0)))
+    #expect(metric != nil)
+    #expect(metric! > 0.85)
+}
+
+@Test func squatMetric_trackedJointsIncludesLowerBody() {
+    let calculator = SquatDepthMetricCalculator()
+    let tracked = Set(calculator.trackedJoints(from: makeFrame(squatJoints(depth: 0.5))))
+    #expect(tracked.contains(.leftHip))
+    #expect(tracked.contains(.rightHip))
+}
+
+@Test func squatMetric_returnsNilWhenShouldersMissing() {
+    let calculator = SquatDepthMetricCalculator()
+    let joints: [VNHumanBodyPose3DObservation.JointName: CameraKit.NormalizedPoint] = [
+        .leftHip:    CameraKit.NormalizedPoint(x: 0.60, y: 0.45),
+        .rightHip:   CameraKit.NormalizedPoint(x: 0.60, y: 0.55),
+        .leftAnkle:  CameraKit.NormalizedPoint(x: 0.90, y: 0.46),
+        .rightAnkle: CameraKit.NormalizedPoint(x: 0.90, y: 0.54),
+    ]
+    #expect(calculator.calculate(from: makeFrame(joints)) == nil)
+}
+
+// MARK: - SquatDepth3DMetricCalculator
+
+@Test func squatDepth3D_increasesWithDepth() {
+    let calculator = SquatDepth3DMetricCalculator()
+    // Warm up the window so adaptive normalisation can establish a range.
+    for d in stride(from: 0.0, through: 1.0, by: 0.1) {
+        _ = calculator.calculate(from: makeFrame(positions3D: squat3DPositions(squatDepth: d)))
+    }
+    let standing = calculator.calculate(from: makeFrame(positions3D: squat3DPositions(squatDepth: 0.0)))
+    let deep     = calculator.calculate(from: makeFrame(positions3D: squat3DPositions(squatDepth: 1.0)))
+    #expect(standing != nil)
+    #expect(deep != nil)
+    #expect(deep! > standing!)
+}
+
+@Test func squatDepth3D_standsAtLowMetricDeepSquatAtHighMetric() {
+    let calculator = SquatDepth3DMetricCalculator()
+    // Warm up with full range so adaptive normalisation kicks in.
+    for d in stride(from: 0.0, through: 1.0, by: 0.1) {
+        _ = calculator.calculate(from: makeFrame(positions3D: squat3DPositions(squatDepth: d)))
+    }
+    let standing = calculator.calculate(from: makeFrame(positions3D: squat3DPositions(squatDepth: 0.0)))
+    let deep     = calculator.calculate(from: makeFrame(positions3D: squat3DPositions(squatDepth: 1.0)))
+    #expect(standing! < 0.20)
+    #expect(deep! > 0.65)
+}
+
+@Test func squatDepth3D_isDistanceInvariant() {
+    // Two calculators, each warmed up at a different camera distance.
+    // The metric should produce the same values regardless of Z depth.
+    let close = SquatDepth3DMetricCalculator()
+    let far   = SquatDepth3DMetricCalculator()
+
+    for d in stride(from: 0.0, through: 1.0, by: 0.1) {
+        _ = close.calculate(from: makeFrame(positions3D: squat3DPositions(squatDepth: d, cameraZ: 1.0)))
+        _ = far.calculate(from:   makeFrame(positions3D: squat3DPositions(squatDepth: d, cameraZ: 4.0)))
+    }
+
+    let depths: [CGFloat] = [0.0, 0.3, 0.5, 0.8, 1.0]
+    for d in depths {
+        let closeMetric = close.calculate(from: makeFrame(positions3D: squat3DPositions(squatDepth: d, cameraZ: 1.0)))
+        let farMetric   = far.calculate(from:   makeFrame(positions3D: squat3DPositions(squatDepth: d, cameraZ: 4.0)))
+        #expect(closeMetric != nil)
+        #expect(farMetric != nil)
+        #expect(abs(closeMetric! - farMetric!) < 0.01, "metric differs at depth \(d): close=\(closeMetric!), far=\(farMetric!)")
+    }
+}
+
+@Test func squatDepth3D_returnsNilWhenPositionsMissing() {
+    let calculator = SquatDepth3DMetricCalculator()
+    #expect(calculator.calculate(from: makeFrame()) == nil)
+}
+
+@Test func squatDepth3D_estimatesAnkleFromKneesWhenAnklesMissing() {
+    let calculator = SquatDepth3DMetricCalculator()
+    var pos = squat3DPositions(squatDepth: 0.0)
+    pos.removeValue(forKey: .leftAnkle)
+    pos.removeValue(forKey: .rightAnkle)
+    let metric = calculator.calculate(from: makeFrame(positions3D: pos))
+    #expect(metric != nil)
+}
+
+@Test func squatDepth3D_returnsNilWhenOnlyShoulderPresent() {
+    let calculator = SquatDepth3DMetricCalculator()
+    let pos: [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>] = [
+        .leftShoulder: SIMD3(x: 0, y: 0.4, z: 2.0),
+    ]
+    #expect(calculator.calculate(from: makeFrame(positions3D: pos)) == nil)
+}
+
+@Test func repCounterPublisher_countsTwoSquatReps() async throws {
+    let profile = SquatExerciseProfile()
+    // spikeMaxDelta=1.0 + emaAlpha=1.0 disables both filters so controlled
+    // synthetic joint frames reach the counter unmodified — filter behaviour
+    // is covered by dedicated SpikeRejectionFilter/EMAMetricFilter tests.
+    let config = RepCountingConfiguration(
+        minTimeBetweenReps: 0.4,
+        minAmplitude: 0.15,
+        spikeMaxDelta: 1.0,
+        emaAlpha: 1.0
+    )
+    let publisher = RepCounterPublisher(configuration: config, exerciseProfile: profile)
+
+    // Thread-safe box: sink closure runs on GCD queue, test reads on Swift task.
+    final class OutputBox: @unchecked Sendable {
+        var lastRepCount = 0
+    }
+    let box = OutputBox()
+    let cancellable = publisher.repCounts.sink { box.lastRepCount = $0.repCount }
+
+    let cycle: [CGFloat] = [0.05, 0.14, 0.24, 0.46, 0.66, 0.72, 0.56, 0.39, 0.20, 0.09, 0.05]
+    func ingestCycle(startSeconds: Double) {
+        for (i, depth) in cycle.enumerated() {
+            let t = CMTime(seconds: startSeconds + Double(i) * 0.1, preferredTimescale: 600)
+            publisher.ingest(PoseFrame(
+                timestamp: t,
+                joints: squatJoints(depth: depth),
+                positions3D: squat3DPositions(squatDepth: depth)
+            ))
+        }
+    }
+
+    ingestCycle(startSeconds: 0.0)
+    ingestCycle(startSeconds: 1.5)
+    // 500ms: enough for all async GCD work items to complete before we read the result.
+    try await Task.sleep(nanoseconds: 500_000_000)
+    _ = cancellable
+
+    #expect(box.lastRepCount == 2)
+}
+
+@Test func repCountingPublishers_areSendable() {
+    func assertSendable<T: Sendable>(_: T.Type) {}
+
+    assertSendable(RepCounterPublisher.self)
+    assertSendable(PoseDetectorPublisher.self)
 }
 
 // MARK: - LivePipeline API

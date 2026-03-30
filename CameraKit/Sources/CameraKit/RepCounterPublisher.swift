@@ -23,6 +23,8 @@ public struct RepCountingConfiguration: Sendable {
     public var minAmplitude: CGFloat
     public var upThreshold: CGFloat
     public var downThreshold: CGFloat
+    public var squatDescendEntryThreshold: CGFloat
+    public var squatStandLockoutThreshold: CGFloat
     public var inactivityResetSeconds: Double
     public var activityDeltaThreshold: CGFloat
     public var spikeMaxDelta: CGFloat
@@ -34,10 +36,12 @@ public struct RepCountingConfiguration: Sendable {
         minPeakHeight: CGFloat = 0.08,
         minValleyDepth: CGFloat = 0.08,
         peakWindowSize: Int = 5,
-        minTimeBetweenReps: Double = 0.5,
-        minAmplitude: CGFloat = 0.15,
-        upThreshold: CGFloat = 0.6,
-        downThreshold: CGFloat = 0.3,
+        minTimeBetweenReps: Double = 0.6,
+        minAmplitude: CGFloat = 0.18,
+        upThreshold: CGFloat = 0.20,
+        downThreshold: CGFloat = 0.62,
+        squatDescendEntryThreshold: CGFloat = 0.12,
+        squatStandLockoutThreshold: CGFloat = 0.10,
         inactivityResetSeconds: Double = 3.0,
         activityDeltaThreshold: CGFloat = 0.015,
         spikeMaxDelta: CGFloat = 0.25,
@@ -52,6 +56,8 @@ public struct RepCountingConfiguration: Sendable {
         self.minAmplitude = minAmplitude
         self.upThreshold = upThreshold
         self.downThreshold = downThreshold
+        self.squatDescendEntryThreshold = squatDescendEntryThreshold
+        self.squatStandLockoutThreshold = squatStandLockoutThreshold
         self.inactivityResetSeconds = inactivityResetSeconds
         self.activityDeltaThreshold = activityDeltaThreshold
         self.spikeMaxDelta = spikeMaxDelta
@@ -65,7 +71,9 @@ public struct RepCountingConfiguration: Sendable {
             upThreshold: upThreshold,
             downThreshold: downThreshold,
             inactivityResetSeconds: inactivityResetSeconds,
-            activityDeltaThreshold: activityDeltaThreshold
+            activityDeltaThreshold: activityDeltaThreshold,
+            squatDescendEntryThreshold: squatDescendEntryThreshold,
+            squatStandLockoutThreshold: squatStandLockoutThreshold
         )
     }
 }
@@ -100,9 +108,14 @@ public struct RepCounterOutput: Sendable {
 }
 
 /// Orchestrates metric calculation, peak detection, and rep counting
-public final class RepCounterPublisher {
+public final class RepCounterPublisher: @unchecked Sendable {
     private let subject = PassthroughSubject<RepCounterOutput, Never>()
     private let processingQueue = DispatchQueue(label: "camerakit.repcount.processing")
+    public let exerciseProfileID: String
+
+    private let peakDetectorFactory: (RepCountingConfiguration) -> any PeakDetector
+    private let metricFilterFactory: (RepCountingConfiguration) -> [any MetricFilter]
+
     private var metricCalculator: any MetricCalculator
     private var peakDetector: any PeakDetector
     private var repCounter: any RepCounter
@@ -112,17 +125,28 @@ public final class RepCounterPublisher {
     private let metricWindowCapacity = 60
     private var runningMax: CGFloat { metricWindow.max() ?? 0 }
 
+    @inline(__always)
+    private func assertOnProcessingQueue() {
+        dispatchPrecondition(condition: .onQueue(processingQueue))
+    }
+
     public var repCounts: AnyPublisher<RepCounterOutput, Never> {
         subject.eraseToAnyPublisher()
     }
 
     public init(
-        metricCalculator: any MetricCalculator = AdaptiveDominantAxisCalculator(),
+        metricCalculator: any MetricCalculator = SquatDepthMetricCalculator(),
         peakDetector: any PeakDetector = LocalExtremaPeakDetector(),
-        repCounter: any RepCounter = CycleBasedRepCounter(),
+        repCounter: any RepCounter = SquatPhaseRepCounter(),
         metricFilters: [any MetricFilter] = [SpikeRejectionFilter(), EMAMetricFilter()],
-        armingThreshold: CGFloat = 0.5
+        armingThreshold: CGFloat = 0.5,
+        exerciseProfileID: String = "custom",
+        peakDetectorFactory: ((RepCountingConfiguration) -> any PeakDetector)? = nil,
+        metricFilterFactory: ((RepCountingConfiguration) -> [any MetricFilter])? = nil
     ) {
+        self.exerciseProfileID = exerciseProfileID
+        self.peakDetectorFactory = peakDetectorFactory ?? { Self.makePeakDetector($0) }
+        self.metricFilterFactory = metricFilterFactory ?? { Self.makeMetricFilters($0) }
         self.metricCalculator = metricCalculator
         self.peakDetector = peakDetector
         self.repCounter = repCounter
@@ -132,23 +156,27 @@ public final class RepCounterPublisher {
 
     public convenience init(
         configuration: RepCountingConfiguration,
-        metricCalculator: any MetricCalculator = AdaptiveDominantAxisCalculator()
+        exerciseProfile: any ExerciseProfile = SquatExerciseProfile()
     ) {
         self.init(
-            metricCalculator: metricCalculator,
-            peakDetector: Self.makePeakDetector(configuration),
-            repCounter: Self.makeRepCounter(configuration),
-            metricFilters: Self.makeMetricFilters(configuration),
-            armingThreshold: configuration.armingThreshold
+            metricCalculator: exerciseProfile.makeMetricCalculator(configuration: configuration),
+            peakDetector: exerciseProfile.makePeakDetector(configuration: configuration),
+            repCounter: exerciseProfile.makeRepCounter(configuration: configuration),
+            metricFilters: exerciseProfile.makeMetricFilters(configuration: configuration),
+            armingThreshold: configuration.armingThreshold,
+            exerciseProfileID: exerciseProfile.id,
+            peakDetectorFactory: { exerciseProfile.makePeakDetector(configuration: $0) },
+            metricFilterFactory: { exerciseProfile.makeMetricFilters(configuration: $0) }
         )
     }
 
     public func updateConfiguration(_ configuration: RepCountingConfiguration) {
         processingQueue.async { [weak self] in
             guard let self else { return }
+            self.assertOnProcessingQueue()
 
-            self.peakDetector = Self.makePeakDetector(configuration)
-            self.metricFilters = Self.makeMetricFilters(configuration)
+            self.peakDetector = self.peakDetectorFactory(configuration)
+            self.metricFilters = self.metricFilterFactory(configuration)
             self.armingThreshold = configuration.armingThreshold
             self.repCounter.updateTuning(configuration.repCounterTuning)
             self.metricWindow.removeAll()
@@ -162,17 +190,19 @@ public final class RepCounterPublisher {
     }
 
     private func process(_ poseFrame: PoseFrame) {
-        guard let metric = metricCalculator.calculate(from: poseFrame.joints) else {
+        assertOnProcessingQueue()
+
+        guard let metric = metricCalculator.calculate(from: poseFrame) else {
             sendOutput(
                 poseFrame: poseFrame,
                 metric: nil,
                 quality: .poor,
-                trackedJoints: metricCalculator.trackedJoints(from: poseFrame.joints)
+                trackedJoints: metricCalculator.trackedJoints(from: poseFrame)
             )
             return
         }
 
-        let trackedJoints = metricCalculator.trackedJoints(from: poseFrame.joints)
+        let trackedJoints = metricCalculator.trackedJoints(from: poseFrame)
 
         // Explicit write-back guards against Swift existential mutation edge cases
         var filteredMetric = metric
@@ -188,24 +218,27 @@ public final class RepCounterPublisher {
         metricWindow.append(filteredMetric)
         if metricWindow.count > metricWindowCapacity { metricWindow.removeFirst() }
 
-        // Threshold-based arming: keep the counter armed whenever we're clearly
-        // above the "standing" position, even when no sharp EMA peak is detected.
-        if filteredMetric > armingThreshold {
-            repCounter.processPeak(.maximum, timestamp: poseFrame.timestamp, metricValue: runningMax)
-        }
-
-        let sample = MetricSample(timestamp: poseFrame.timestamp, value: filteredMetric)
-
         let previousCount = repCounter.count
-        if let peak = peakDetector.ingest(sample) {
-            switch peak {
-            case .minimum:
-                repCounter.processPeak(.minimum, timestamp: poseFrame.timestamp, metricValue: filteredMetric)
-            case .maximum:
-                // Redundant when arming threshold fired, but kept for protocol contract
+
+        if repCounter.consumesPeakEvents {
+            // Threshold-based arming keeps the peak-driven counter armed whenever
+            // we are clearly above the standing position.
+            if filteredMetric > armingThreshold {
                 repCounter.processPeak(.maximum, timestamp: poseFrame.timestamp, metricValue: runningMax)
             }
+
+            let sample = MetricSample(timestamp: poseFrame.timestamp, value: filteredMetric)
+
+            if let peak = peakDetector.ingest(sample) {
+                switch peak {
+                case .minimum:
+                    repCounter.processPeak(.minimum, timestamp: poseFrame.timestamp, metricValue: filteredMetric)
+                case .maximum:
+                    repCounter.processPeak(.maximum, timestamp: poseFrame.timestamp, metricValue: runningMax)
+                }
+            }
         }
+
         if repCounter.count != previousCount {
             logger.info("Rep counted — total=\(self.repCounter.count) state=\(self.repCounter.state.rawValue)")
         }
@@ -227,6 +260,8 @@ public final class RepCounterPublisher {
         quality: DetectionQuality,
         trackedJoints: [VNHumanBodyPose3DObservation.JointName]
     ) {
+        assertOnProcessingQueue()
+
         let output = RepCounterOutput(
             poseFrame: poseFrame,
             repCount: repCounter.count,
@@ -242,6 +277,7 @@ public final class RepCounterPublisher {
     public func reset() {
         processingQueue.async { [weak self] in
             guard let self else { return }
+            self.assertOnProcessingQueue()
             self.repCounter.reset()
             self.metricWindow.removeAll()
         }
@@ -256,14 +292,16 @@ public final class RepCounterPublisher {
         )
     }
 
-    private static func makeRepCounter(_ configuration: RepCountingConfiguration) -> CycleBasedRepCounter {
-        CycleBasedRepCounter(
+    private static func makeRepCounter(_ configuration: RepCountingConfiguration) -> SquatPhaseRepCounter {
+        SquatPhaseRepCounter(
             minTimeBetweenReps: configuration.minTimeBetweenReps,
             minAmplitude: configuration.minAmplitude,
             upThreshold: configuration.upThreshold,
             downThreshold: configuration.downThreshold,
             inactivityResetSeconds: configuration.inactivityResetSeconds,
-            activityDeltaThreshold: configuration.activityDeltaThreshold
+            activityDeltaThreshold: configuration.activityDeltaThreshold,
+            descendEntryThreshold: configuration.squatDescendEntryThreshold,
+            standLockoutThreshold: configuration.squatStandLockoutThreshold
         )
     }
 

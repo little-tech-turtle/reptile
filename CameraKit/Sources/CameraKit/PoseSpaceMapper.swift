@@ -17,6 +17,17 @@ public struct NormalizedPoint: Sendable, Hashable {
 public struct PoseFrame: Sendable {
     public let timestamp: CMTime
     public let joints: [VNHumanBodyPose3DObservation.JointName: NormalizedPoint]
+    public let positions3D: [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>]
+
+    public init(
+        timestamp: CMTime,
+        joints: [VNHumanBodyPose3DObservation.JointName: NormalizedPoint],
+        positions3D: [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>] = [:]
+    ) {
+        self.timestamp = timestamp
+        self.joints = joints
+        self.positions3D = positions3D
+    }
 }
 
 public enum PoseSpaceMapper {
@@ -34,6 +45,20 @@ public enum PoseSpaceMapper {
             let np = normalizedPosePoint(from: p.location)
             guard (0...1).contains(np.x) && (0...1).contains(np.y) else { continue }
             out[joint] = np
+        }
+        return out
+    }
+
+    public static func extract3DPositions(
+        from obs: VNHumanBodyPose3DObservation
+    ) -> [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>] {
+        var out: [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>] = [:]
+        out.reserveCapacity(obs.availableJointNames.count)
+
+        for joint in obs.availableJointNames {
+            guard let p = try? obs.recognizedPoint(joint) else { continue }
+            let col3 = p.position.columns.3
+            out[joint] = SIMD3<Float>(col3.x, col3.y, col3.z)
         }
         return out
     }

@@ -7,9 +7,10 @@
 
 import CameraKit
 import UIKit
+import QuartzCore
 
 final class LiveCameraViewController: UIViewController {
-    private static let tuningStorageKey = "repTuning.v1"
+    private static let tuningStorageKey = "repTuning.v3"
 
     private let previewView = CameraPreviewView()
     private let repCountLabel = UILabel()
@@ -19,6 +20,23 @@ final class LiveCameraViewController: UIViewController {
     private let tuningPanel = RepTuningPanelView()
 
     private let coordinator = LiveCameraCoordinator()
+
+    private var pendingConfigurationUpdate: DispatchWorkItem?
+    private let configurationDebounceInterval: TimeInterval = 0.12
+    private let debugUpdateInterval: CFTimeInterval = 1.0 / 12.0
+    private var lastDebugUpdateTime: CFTimeInterval = 0
+    private var isAdjustingTuningControls = false
+    private lazy var debugToggleGesture: UITapGestureRecognizer = {
+        let gesture = UITapGestureRecognizer(target: self, action: #selector(toggleDebug))
+        gesture.numberOfTapsRequired = 2
+        gesture.cancelsTouchesInView = false
+        gesture.delegate = self
+        return gesture
+    }()
+
+    deinit {
+        pendingConfigurationUpdate?.cancel()
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -30,19 +48,17 @@ final class LiveCameraViewController: UIViewController {
         setupStatusLabel()
         setupDebugView()
         setupTuningPanel()
-
-        let tap = UITapGestureRecognizer(target: self, action: #selector(toggleDebug))
-        view.addGestureRecognizer(tap)
+        view.addGestureRecognizer(debugToggleGesture)
 
         let initialTuning = loadSavedRepTuning()
         coordinator.updateRepCountingConfiguration(initialTuning)
         debugView.updateConfiguration(initialTuning)
         tuningPanel.apply(configuration: initialTuning)
         tuningPanel.onConfigurationChanged = { [weak self] config in
-            guard let self else { return }
-            self.coordinator.updateRepCountingConfiguration(config)
-            self.debugView.updateConfiguration(config)
-            self.saveRepTuning(config)
+            self?.scheduleConfigurationUpdate(config)
+        }
+        tuningPanel.onInteractionChanged = { [weak self] isInteracting in
+            self?.setTuningInteractionState(isInteracting)
         }
 
         coordinator.bind(previewView: previewView) { [weak self] model in
@@ -136,6 +152,7 @@ final class LiveCameraViewController: UIViewController {
 
     private func setupDebugView() {
         debugView.isHidden = true
+        debugView.isUserInteractionEnabled = false
         debugView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(debugView)
 
@@ -154,11 +171,16 @@ final class LiveCameraViewController: UIViewController {
         tuningPanel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(tuningPanel)
 
+        let preferredHeight = tuningPanel.heightAnchor.constraint(equalToConstant: 320)
+        preferredHeight.priority = .defaultHigh
+
         NSLayoutConstraint.activate([
             tuningPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
             tuningPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
             tuningPanel.bottomAnchor.constraint(equalTo: debugView.topAnchor, constant: -10),
-            tuningPanel.heightAnchor.constraint(equalToConstant: 244),
+            tuningPanel.topAnchor.constraint(greaterThanOrEqualTo: statusLabel.bottomAnchor, constant: 8),
+            tuningPanel.heightAnchor.constraint(greaterThanOrEqualToConstant: 240),
+            preferredHeight,
         ])
 
         view.bringSubviewToFront(tuningPanel)
@@ -167,6 +189,7 @@ final class LiveCameraViewController: UIViewController {
     @objc private func toggleDebug() {
         debugView.isHidden.toggle()
         tuningPanel.isHidden.toggle()
+        lastDebugUpdateTime = 0
     }
 
     private func currentInterfaceOrientation() -> UIInterfaceOrientation {
@@ -190,8 +213,35 @@ final class LiveCameraViewController: UIViewController {
         statusLabel.isHidden = model.statusText.isEmpty
 
         if let output = model.output {
-            debugView.update(output: output)
+            if !debugView.isHidden && !isAdjustingTuningControls {
+                let now = CACurrentMediaTime()
+                if now - lastDebugUpdateTime >= debugUpdateInterval {
+                    lastDebugUpdateTime = now
+                    debugView.update(output: output)
+                }
+            }
         }
+    }
+
+    private func setTuningInteractionState(_ isInteracting: Bool) {
+        isAdjustingTuningControls = isInteracting
+        if !isInteracting {
+            lastDebugUpdateTime = 0
+        }
+    }
+
+    private func scheduleConfigurationUpdate(_ configuration: RepCountingConfiguration) {
+        pendingConfigurationUpdate?.cancel()
+
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.coordinator.updateRepCountingConfiguration(configuration)
+            self.debugView.updateConfiguration(configuration)
+            self.saveRepTuning(configuration)
+        }
+
+        pendingConfigurationUpdate = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + configurationDebounceInterval, execute: work)
     }
 
     private func saveRepTuning(_ configuration: RepCountingConfiguration) {
@@ -204,6 +254,8 @@ final class LiveCameraViewController: UIViewController {
             "minAmplitude": Double(configuration.minAmplitude),
             "upThreshold": Double(configuration.upThreshold),
             "downThreshold": Double(configuration.downThreshold),
+            "squatDescendEntryThreshold": Double(configuration.squatDescendEntryThreshold),
+            "squatStandLockoutThreshold": Double(configuration.squatStandLockoutThreshold),
             "inactivityResetSeconds": configuration.inactivityResetSeconds,
             "activityDeltaThreshold": Double(configuration.activityDeltaThreshold),
             "spikeMaxDelta": Double(configuration.spikeMaxDelta),
@@ -231,6 +283,13 @@ final class LiveCameraViewController: UIViewController {
             return LiveCameraCoordinator.defaultRepTuning
         }
 
+        let squatDescendEntryThreshold =
+            (values["squatDescendEntryThreshold"] as? Double)
+            ?? Double(LiveCameraCoordinator.defaultRepTuning.squatDescendEntryThreshold)
+        let squatStandLockoutThreshold =
+            (values["squatStandLockoutThreshold"] as? Double)
+            ?? Double(LiveCameraCoordinator.defaultRepTuning.squatStandLockoutThreshold)
+
         return RepCountingConfiguration(
             armingThreshold: CGFloat(armingThreshold),
             peakHistoryCapacity: LiveCameraCoordinator.defaultRepTuning.peakHistoryCapacity,
@@ -241,10 +300,40 @@ final class LiveCameraViewController: UIViewController {
             minAmplitude: CGFloat(minAmplitude),
             upThreshold: CGFloat(upThreshold),
             downThreshold: CGFloat(downThreshold),
+            squatDescendEntryThreshold: CGFloat(squatDescendEntryThreshold),
+            squatStandLockoutThreshold: CGFloat(squatStandLockoutThreshold),
             inactivityResetSeconds: inactivityResetSeconds,
             activityDeltaThreshold: CGFloat(activityDeltaThreshold),
             spikeMaxDelta: CGFloat(spikeMaxDelta),
             emaAlpha: CGFloat(emaAlpha)
         )
+    }
+}
+
+extension LiveCameraViewController: UIGestureRecognizerDelegate {
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard gestureRecognizer === debugToggleGesture else { return true }
+        return !isInteractiveControlTouch(touch.view)
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        false
+    }
+
+    private func isInteractiveControlTouch(_ touchedView: UIView?) -> Bool {
+        var node = touchedView
+        while let view = node {
+            if view is UIControl {
+                return true
+            }
+            if view === tuningPanel {
+                return true
+            }
+            node = view.superview
+        }
+        return false
     }
 }

@@ -12,7 +12,7 @@ import OSLog
 
 private let logger = Logger(subsystem: "CameraKit", category: "poseDetection")
 
-public final class PoseDetectorPublisher{
+public final class PoseDetectorPublisher: @unchecked Sendable {
     private let request = VNDetectHumanBodyPose3DRequest()
     private let handler = VNSequenceRequestHandler()
     
@@ -27,37 +27,58 @@ public final class PoseDetectorPublisher{
     
     public init(){}
     
-    public func ingest (_ frame: CameraFrame) {
-        guard gate.wait(timeout: .now()) == .success else {return}
+    private final class PixelBufferBox: @unchecked Sendable {
+        let value: CVImageBuffer
+
+        init(_ value: CVImageBuffer) {
+            self.value = value
+        }
+    }
+
+    @inline(__always)
+    private func assertOnVisionQueue() {
+        dispatchPrecondition(condition: .onQueue(visionQueue))
+    }
+
+    public func ingest(_ frame: CameraFrame) {
+        guard gate.wait(timeout: .now()) == .success else { return }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(frame.sampleBuffer) else {
             gate.signal()
             return
         }
-        
+
         let timeStamp = CMSampleBufferGetPresentationTimeStamp(frame.sampleBuffer)
         let orientation = frame.visionOrientation
-        
-        visionQueue.async { [weak self] in
-            guard let self else {return}
-            defer {self.gate.signal()}
-            autoreleasepool{
+
+        let pixelBufferBox = PixelBufferBox(pixelBuffer)
+
+        visionQueue.async { [weak self, timeStamp, orientation, pixelBufferBox] in
+            guard let self else { return }
+            self.assertOnVisionQueue()
+
+            defer { self.gate.signal() }
+
+            autoreleasepool {
                 do {
-                    try self.handler.perform([self.request], on: pixelBuffer, orientation:orientation)
-                    guard let obs = self.request.results?.first else {return}
-                    
+                    try self.handler.perform([self.request], on: pixelBufferBox.value, orientation: orientation)
+                    guard let obs = self.request.results?.first else { return }
+
                     let joints = PoseSpaceMapper.extractNormalizedJoints(from: obs)
-                    self.subject.send(PoseFrame(timestamp:timeStamp,joints:joints))
-                    
+                    let pos3D = PoseSpaceMapper.extract3DPositions(from: obs)
+                    self.subject.send(PoseFrame(timestamp: timeStamp, joints: joints, positions3D: pos3D))
                 } catch {
                     logger.error("Vision request failed: \(error.localizedDescription)")
                 }
             }
-            
         }
     }
-    
+
     public func finish() {
-        subject.send(completion: .finished)
+        visionQueue.async { [weak self] in
+            guard let self else { return }
+            self.assertOnVisionQueue()
+            self.subject.send(completion: .finished)
+        }
     }
-    
+
 }
