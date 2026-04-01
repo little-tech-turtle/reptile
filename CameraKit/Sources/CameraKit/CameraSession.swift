@@ -106,7 +106,6 @@ public final class CameraSession: NSObject {
         }
     }
 
-
     public func visionOrientation() -> CGImagePropertyOrientation {
         FrameTransformPolicy.visionOrientation(
             for: interfaceOrientation,
@@ -114,10 +113,9 @@ public final class CameraSession: NSObject {
         )
     }
 
-
-
     private func configureSession() throws {
         session.beginConfiguration()
+        defer { session.commitConfiguration() }
 
         let currentInputs = session.inputs
         currentInputs.forEach { session.removeInput($0) }
@@ -125,38 +123,79 @@ public final class CameraSession: NSObject {
         let currentOutputs = session.outputs
         currentOutputs.forEach { session.removeOutput($0) }
 
-        guard
-            let device = AVCaptureDevice.default(
-                .builtInWideAngleCamera,
-                for: .video,
-                position: cameraPosition
-            )
-        else {
-            session.commitConfiguration()
-            throw CameraSessionError.noCameraAvailable
-        }
-        let input = try AVCaptureDeviceInput(device: device)
-
-        guard session.canAddInput(input) else {
-            session.commitConfiguration()
-            throw CameraSessionError.configurationFailed
-        }
-        session.addInput(input)
+        try addInput(for: cameraPosition)
 
         let output = AVCaptureVideoDataOutput()
-        //output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
         output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange]
-        //output.alwaysDiscardsLateVideoFrames = true
-        
+
         output.setSampleBufferDelegate(self, queue: sessionQueue)
-        
+
         guard session.canAddOutput(output) else {
-            session.commitConfiguration()
             throw CameraSessionError.configurationFailed
         }
 
         session.addOutput(output)
-        session.commitConfiguration()
+    }
+
+    private func addInput(for position: AVCaptureDevice.Position) throws {
+        guard
+            let device = AVCaptureDevice.default(
+                .builtInWideAngleCamera,
+                for: .video,
+                position: position
+            )
+        else {
+            throw CameraSessionError.noCameraAvailable
+        }
+
+        let input: AVCaptureDeviceInput
+        do {
+            input = try AVCaptureDeviceInput(device: device)
+        } catch {
+            throw CameraSessionError.configurationFailed
+        }
+
+        guard session.canAddInput(input) else {
+            throw CameraSessionError.configurationFailed
+        }
+
+        session.addInput(input)
+    }
+
+    private func switchInput(to position: AVCaptureDevice.Position) throws {
+        let previousInputs = session.inputs
+
+        guard
+            let device = AVCaptureDevice.default(
+                .builtInWideAngleCamera,
+                for: .video,
+                position: position
+            )
+        else {
+            throw CameraSessionError.noCameraAvailable
+        }
+
+        let newInput: AVCaptureDeviceInput
+        do {
+            newInput = try AVCaptureDeviceInput(device: device)
+        } catch {
+            throw CameraSessionError.configurationFailed
+        }
+
+        session.beginConfiguration()
+        defer { session.commitConfiguration() }
+
+        previousInputs.forEach { session.removeInput($0) }
+
+        guard session.canAddInput(newInput) else {
+            previousInputs.forEach {
+                guard session.canAddInput($0) else { return }
+                session.addInput($0)
+            }
+            throw CameraSessionError.configurationFailed
+        }
+
+        session.addInput(newInput)
     }
 
     public func setInterfaceOrientation(_ io: UIInterfaceOrientation) {
@@ -173,7 +212,20 @@ public final class CameraSession: NSObject {
 
     public func setCameraPosition(_ position: AVCaptureDevice.Position) {
         sessionQueue.async { [weak self] in
-            self?.cameraPosition = position
+            guard let self else { return }
+            guard position == .front || position == .back else { return }
+            guard self.cameraPosition != position else { return }
+
+            if self.session.isRunning {
+                do {
+                    try self.switchInput(to: position)
+                    self.cameraPosition = position
+                } catch {
+                    return
+                }
+            } else {
+                self.cameraPosition = position
+            }
         }
     }
 
@@ -183,8 +235,6 @@ public final class CameraSession: NSObject {
         }
     }
 }
-
-
 
 extension CameraSession: AVCaptureVideoDataOutputSampleBufferDelegate {
     public func captureOutput(

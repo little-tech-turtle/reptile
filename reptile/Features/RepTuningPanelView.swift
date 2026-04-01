@@ -15,6 +15,7 @@ final class RepTuningPanelView: UIView {
     var onInteractionChanged: ((Bool) -> Void)?
 
     private var configuration = RepCountingConfiguration()
+    private var exerciseMode: ExerciseMode = .squat
     private var activeSliderInteractions = 0
 
     private let titleLabel: UILabel = {
@@ -56,6 +57,8 @@ final class RepTuningPanelView: UIView {
     private let hipBottomRow = TuningSliderRow(title: "Hip bottom flexion", min: 30, max: 120, format: "%.0f°")
     private let kneeLockoutRow = TuningSliderRow(title: "Knee lockout max", min: 0, max: 45, format: "%.0f°")
     private let hipLockoutRow = TuningSliderRow(title: "Hip lockout max", min: 0, max: 50, format: "%.0f°")
+    private let curlTopRow = TuningSliderRow(title: "Curl top flexion", min: 45, max: 140, format: "%.0f°")
+    private let curlLockoutRow = TuningSliderRow(title: "Curl lockout max", min: 0, max: 50, format: "%.0f°")
     private let minAmplitudeRow = TuningSliderRow(title: "Min range of motion", min: 0.05, max: 0.55, format: "%.0f%%", displayScale: 100)
     private let minTimeRow = TuningSliderRow(title: "Min time between reps", min: 0.20, max: 1.80, format: "%.1fs")
 
@@ -72,12 +75,19 @@ final class RepTuningPanelView: UIView {
     }
 
     func apply(configuration: RepCountingConfiguration) {
+        apply(configuration: configuration, exerciseMode: exerciseMode)
+    }
+
+    func apply(configuration: RepCountingConfiguration, exerciseMode: ExerciseMode) {
         self.configuration = configuration
+        self.exerciseMode = exerciseMode
+        titleLabel.text = "Rep Tuning (\(exerciseMode.title))"
+        applyExerciseVisibility()
         syncRows()
     }
 
     @objc private func resetTapped() {
-        applyAndPublish(LiveCameraCoordinator.defaultRepTuning)
+        applyAndPublish(LiveCameraCoordinator.defaultRepTuning(for: exerciseMode))
     }
 
     private func setupUI() {
@@ -94,6 +104,8 @@ final class RepTuningPanelView: UIView {
         stackView.addArrangedSubview(hipBottomRow)
         stackView.addArrangedSubview(kneeLockoutRow)
         stackView.addArrangedSubview(hipLockoutRow)
+        stackView.addArrangedSubview(curlTopRow)
+        stackView.addArrangedSubview(curlLockoutRow)
         stackView.addArrangedSubview(minAmplitudeRow)
         stackView.addArrangedSubview(minTimeRow)
         stackView.translatesAutoresizingMaskIntoConstraints = false
@@ -136,6 +148,12 @@ final class RepTuningPanelView: UIView {
         hipLockoutRow.onValueChanged = { [weak self] value in
             self?.update { $0.squatHipLockoutFlexionDegrees = CGFloat(value) }
         }
+        curlTopRow.onValueChanged = { [weak self] value in
+            self?.update { $0.curlTopFlexionDegrees = CGFloat(value) }
+        }
+        curlLockoutRow.onValueChanged = { [weak self] value in
+            self?.update { $0.curlLockoutFlexionDegrees = CGFloat(value) }
+        }
         minAmplitudeRow.onValueChanged = { [weak self] value in
             self?.update { $0.minAmplitude = CGFloat(value) }
         }
@@ -143,7 +161,7 @@ final class RepTuningPanelView: UIView {
             self?.update { $0.minTimeBetweenReps = Double(value) }
         }
 
-        let rows = [kneeBottomRow, hipBottomRow, kneeLockoutRow, hipLockoutRow, minAmplitudeRow, minTimeRow]
+        let rows = [kneeBottomRow, hipBottomRow, kneeLockoutRow, hipLockoutRow, curlTopRow, curlLockoutRow, minAmplitudeRow, minTimeRow]
         for row in rows {
             row.onInteractionChanged = { [weak self] isInteracting in
                 self?.handleRowInteractionChanged(isInteracting)
@@ -181,8 +199,20 @@ final class RepTuningPanelView: UIView {
         hipBottomRow.setValue(Float(configuration.squatHipBottomFlexionDegrees))
         kneeLockoutRow.setValue(Float(configuration.squatKneeLockoutFlexionDegrees))
         hipLockoutRow.setValue(Float(configuration.squatHipLockoutFlexionDegrees))
+        curlTopRow.setValue(Float(configuration.curlTopFlexionDegrees))
+        curlLockoutRow.setValue(Float(configuration.curlLockoutFlexionDegrees))
         minAmplitudeRow.setValue(Float(configuration.minAmplitude))
         minTimeRow.setValue(Float(configuration.minTimeBetweenReps))
+    }
+
+    private func applyExerciseVisibility() {
+        let isSquat = exerciseMode == .squat
+        kneeBottomRow.isHidden = !isSquat
+        hipBottomRow.isHidden = !isSquat
+        kneeLockoutRow.isHidden = !isSquat
+        hipLockoutRow.isHidden = !isSquat
+        curlTopRow.isHidden = isSquat
+        curlLockoutRow.isHidden = isSquat
     }
 }
 

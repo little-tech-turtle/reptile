@@ -30,6 +30,8 @@ public struct RepCountingConfiguration: Sendable {
     public var squatKneeLockoutFlexionDegrees: CGFloat
     public var squatHipLockoutFlexionDegrees: CGFloat
     public var squatMaxSideAsymmetryDegrees: CGFloat
+    public var curlTopFlexionDegrees: CGFloat
+    public var curlLockoutFlexionDegrees: CGFloat
     public var inactivityResetSeconds: Double
     public var activityDeltaThreshold: CGFloat
     public var spikeMaxDelta: CGFloat
@@ -52,6 +54,8 @@ public struct RepCountingConfiguration: Sendable {
         squatKneeLockoutFlexionDegrees: CGFloat = 18,
         squatHipLockoutFlexionDegrees: CGFloat = 20,
         squatMaxSideAsymmetryDegrees: CGFloat = 25,
+        curlTopFlexionDegrees: CGFloat = 95,
+        curlLockoutFlexionDegrees: CGFloat = 18,
         inactivityResetSeconds: Double = 3.0,
         activityDeltaThreshold: CGFloat = 0.015,
         spikeMaxDelta: CGFloat = 0.25,
@@ -73,6 +77,8 @@ public struct RepCountingConfiguration: Sendable {
         self.squatKneeLockoutFlexionDegrees = squatKneeLockoutFlexionDegrees
         self.squatHipLockoutFlexionDegrees = squatHipLockoutFlexionDegrees
         self.squatMaxSideAsymmetryDegrees = squatMaxSideAsymmetryDegrees
+        self.curlTopFlexionDegrees = curlTopFlexionDegrees
+        self.curlLockoutFlexionDegrees = curlLockoutFlexionDegrees
         self.inactivityResetSeconds = inactivityResetSeconds
         self.activityDeltaThreshold = activityDeltaThreshold
         self.spikeMaxDelta = spikeMaxDelta
@@ -95,6 +101,7 @@ public struct RepCountingConfiguration: Sendable {
 
 /// Output from rep counter including pose and rep count
 public struct RepCounterOutput: Sendable {
+    public let exerciseProfileID: String
     public let poseFrame: PoseFrame
     public let repCount: Int
     public let currentMetric: CGFloat?
@@ -103,8 +110,10 @@ public struct RepCounterOutput: Sendable {
     public let runningMax: CGFloat
     public let trackedJoints: [VNHumanBodyPose3DObservation.JointName]
     public let squatFlexionMetrics: SquatFlexionMetrics?
+    public let curlFlexionMetrics: CurlFlexionMetrics?
 
     public init(
+        exerciseProfileID: String,
         poseFrame: PoseFrame,
         repCount: Int,
         currentMetric: CGFloat?,
@@ -112,8 +121,10 @@ public struct RepCounterOutput: Sendable {
         detectionQuality: DetectionQuality,
         runningMax: CGFloat = 0,
         trackedJoints: [VNHumanBodyPose3DObservation.JointName] = [],
-        squatFlexionMetrics: SquatFlexionMetrics? = nil
+        squatFlexionMetrics: SquatFlexionMetrics? = nil,
+        curlFlexionMetrics: CurlFlexionMetrics? = nil
     ) {
+        self.exerciseProfileID = exerciseProfileID
         self.poseFrame = poseFrame
         self.repCount = repCount
         self.currentMetric = currentMetric
@@ -122,6 +133,7 @@ public struct RepCounterOutput: Sendable {
         self.runningMax = runningMax
         self.trackedJoints = trackedJoints
         self.squatFlexionMetrics = squatFlexionMetrics
+        self.curlFlexionMetrics = curlFlexionMetrics
     }
 }
 
@@ -129,11 +141,12 @@ public struct RepCounterOutput: Sendable {
 public final class RepCounterPublisher: @unchecked Sendable {
     private let subject = PassthroughSubject<RepCounterOutput, Never>()
     private let processingQueue = DispatchQueue(label: "camerakit.repcount.processing")
-    public let exerciseProfileID: String
+    public private(set) var exerciseProfileID: String
 
-    private let metricCalculatorFactory: (RepCountingConfiguration) -> any MetricCalculator
-    private let peakDetectorFactory: (RepCountingConfiguration) -> any PeakDetector
-    private let metricFilterFactory: (RepCountingConfiguration) -> [any MetricFilter]
+    private var metricCalculatorFactory: (RepCountingConfiguration) -> any MetricCalculator
+    private var peakDetectorFactory: (RepCountingConfiguration) -> any PeakDetector
+    private var repCounterFactory: (RepCountingConfiguration) -> any RepCounter
+    private var metricFilterFactory: (RepCountingConfiguration) -> [any MetricFilter]
 
     private var metricCalculator: any MetricCalculator
     private var peakDetector: any PeakDetector
@@ -162,11 +175,13 @@ public final class RepCounterPublisher: @unchecked Sendable {
         exerciseProfileID: String = "custom",
         metricCalculatorFactory: ((RepCountingConfiguration) -> any MetricCalculator)? = nil,
         peakDetectorFactory: ((RepCountingConfiguration) -> any PeakDetector)? = nil,
+        repCounterFactory: ((RepCountingConfiguration) -> any RepCounter)? = nil,
         metricFilterFactory: ((RepCountingConfiguration) -> [any MetricFilter])? = nil
     ) {
         self.exerciseProfileID = exerciseProfileID
         self.metricCalculatorFactory = metricCalculatorFactory ?? { _ in metricCalculator }
         self.peakDetectorFactory = peakDetectorFactory ?? { Self.makePeakDetector($0) }
+        self.repCounterFactory = repCounterFactory ?? { _ in repCounter }
         self.metricFilterFactory = metricFilterFactory ?? { Self.makeMetricFilters($0) }
         self.metricCalculator = metricCalculator
         self.peakDetector = peakDetector
@@ -188,6 +203,7 @@ public final class RepCounterPublisher: @unchecked Sendable {
             exerciseProfileID: exerciseProfile.id,
             metricCalculatorFactory: { exerciseProfile.makeMetricCalculator(configuration: $0) },
             peakDetectorFactory: { exerciseProfile.makePeakDetector(configuration: $0) },
+            repCounterFactory: { exerciseProfile.makeRepCounter(configuration: $0) },
             metricFilterFactory: { exerciseProfile.makeMetricFilters(configuration: $0) }
         )
     }
@@ -206,6 +222,29 @@ public final class RepCounterPublisher: @unchecked Sendable {
         }
     }
 
+    public func setExerciseProfile(
+        _ exerciseProfile: any ExerciseProfile,
+        configuration: RepCountingConfiguration
+    ) {
+        processingQueue.async { [weak self] in
+            guard let self else { return }
+            self.assertOnProcessingQueue()
+
+            self.exerciseProfileID = exerciseProfile.id
+            self.metricCalculatorFactory = { exerciseProfile.makeMetricCalculator(configuration: $0) }
+            self.peakDetectorFactory = { exerciseProfile.makePeakDetector(configuration: $0) }
+            self.repCounterFactory = { exerciseProfile.makeRepCounter(configuration: $0) }
+            self.metricFilterFactory = { exerciseProfile.makeMetricFilters(configuration: $0) }
+
+            self.metricCalculator = self.metricCalculatorFactory(configuration)
+            self.peakDetector = self.peakDetectorFactory(configuration)
+            self.repCounter = self.repCounterFactory(configuration)
+            self.metricFilters = self.metricFilterFactory(configuration)
+            self.armingThreshold = configuration.armingThreshold
+            self.metricWindow.removeAll()
+        }
+    }
+
     public func ingest(_ poseFrame: PoseFrame) {
         processingQueue.async { [weak self] in
             self?.process(poseFrame)
@@ -216,6 +255,7 @@ public final class RepCounterPublisher: @unchecked Sendable {
         assertOnProcessingQueue()
 
         let squatFlexionMetrics = currentSquatFlexionMetrics(from: poseFrame)
+        let curlFlexionMetrics = currentCurlFlexionMetrics(from: poseFrame)
 
         guard let metric = metricCalculator.calculate(from: poseFrame) else {
             sendOutput(
@@ -223,7 +263,8 @@ public final class RepCounterPublisher: @unchecked Sendable {
                 metric: nil,
                 quality: .poor,
                 trackedJoints: metricCalculator.trackedJoints(from: poseFrame),
-                squatFlexionMetrics: squatFlexionMetrics
+                squatFlexionMetrics: squatFlexionMetrics,
+                curlFlexionMetrics: curlFlexionMetrics
             )
             return
         }
@@ -277,7 +318,8 @@ public final class RepCounterPublisher: @unchecked Sendable {
             metric: filteredMetric,
             quality: quality,
             trackedJoints: trackedJoints,
-            squatFlexionMetrics: squatFlexionMetrics
+            squatFlexionMetrics: squatFlexionMetrics,
+            curlFlexionMetrics: curlFlexionMetrics
         )
     }
 
@@ -286,11 +328,13 @@ public final class RepCounterPublisher: @unchecked Sendable {
         metric: CGFloat?,
         quality: DetectionQuality,
         trackedJoints: [VNHumanBodyPose3DObservation.JointName],
-        squatFlexionMetrics: SquatFlexionMetrics?
+        squatFlexionMetrics: SquatFlexionMetrics?,
+        curlFlexionMetrics: CurlFlexionMetrics?
     ) {
         assertOnProcessingQueue()
 
         let output = RepCounterOutput(
+            exerciseProfileID: exerciseProfileID,
             poseFrame: poseFrame,
             repCount: repCounter.count,
             currentMetric: metric,
@@ -298,13 +342,21 @@ public final class RepCounterPublisher: @unchecked Sendable {
             detectionQuality: quality,
             runningMax: runningMax,
             trackedJoints: trackedJoints,
-            squatFlexionMetrics: squatFlexionMetrics
+            squatFlexionMetrics: squatFlexionMetrics,
+            curlFlexionMetrics: curlFlexionMetrics
         )
         subject.send(output)
     }
 
     private func currentSquatFlexionMetrics(from poseFrame: PoseFrame) -> SquatFlexionMetrics? {
         if let calculator = metricCalculator as? SquatJointFlexion3DMetricCalculator {
+            return calculator.flexionMetrics(from: poseFrame)
+        }
+        return nil
+    }
+
+    private func currentCurlFlexionMetrics(from poseFrame: PoseFrame) -> CurlFlexionMetrics? {
+        if let calculator = metricCalculator as? BicepCurlFlexion3DMetricCalculator {
             return calculator.flexionMetrics(from: poseFrame)
         }
         return nil

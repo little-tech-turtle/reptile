@@ -6,20 +6,26 @@
 //
 
 import CameraKit
+import AVFoundation
 import UIKit
 import QuartzCore
 
 final class LiveCameraViewController: UIViewController {
-    private static let tuningStorageKey = "repTuning.v4"
+    private static let tuningStoragePrefix = "repTuning.v5"
+    private static let cameraPositionStorageKey = "cameraPosition.v1"
+    private static let exerciseModeStorageKey = "exerciseMode.v1"
 
     private let previewView = CameraPreviewView()
     private let repCountLabel = UILabel()
     private let statusLabel = UILabel()
+    private let exerciseSelector = UISegmentedControl(items: ExerciseMode.allCases.map(\.title))
+    private let cameraToggleButton = UIButton(type: .system)
     private let overlayView = SkeletonOverlayView()
     private let debugView = DebugOverlayView()
     private let tuningPanel = RepTuningPanelView()
 
     private let coordinator = LiveCameraCoordinator()
+    private var selectedExercise: ExerciseMode = .squat
 
     private var pendingConfigurationUpdate: DispatchWorkItem?
     private let configurationDebounceInterval: TimeInterval = 0.12
@@ -46,16 +52,26 @@ final class LiveCameraViewController: UIViewController {
         setupOverlayView()
         setupRepCountLabel()
         setupStatusLabel()
+        setupExerciseSelector()
+        setupCameraToggleButton()
         setupDebugView()
         setupTuningPanel()
         view.addGestureRecognizer(debugToggleGesture)
 
-        let initialTuning = loadSavedRepTuning()
-        coordinator.updateRepCountingConfiguration(initialTuning)
-        debugView.updateConfiguration(initialTuning)
-        tuningPanel.apply(configuration: initialTuning)
+        let initialExercise = loadSavedExerciseMode()
+        selectedExercise = initialExercise
+        let initialTuning = loadSavedRepTuning(for: initialExercise)
+        let initialCameraPosition = loadSavedCameraPosition()
+
+        coordinator.setExercise(initialExercise, configuration: initialTuning)
+        coordinator.setCameraPosition(initialCameraPosition)
+        debugView.updateConfiguration(initialTuning, exerciseMode: initialExercise)
+        tuningPanel.apply(configuration: initialTuning, exerciseMode: initialExercise)
+        updateCameraToggleButton(for: initialCameraPosition)
+        updateExerciseSelector(for: initialExercise)
         tuningPanel.onConfigurationChanged = { [weak self] config in
-            self?.scheduleConfigurationUpdate(config)
+            guard let self else { return }
+            self.scheduleConfigurationUpdate(config, for: self.selectedExercise)
         }
         tuningPanel.onInteractionChanged = { [weak self] isInteracting in
             self?.setTuningInteractionState(isInteracting)
@@ -150,6 +166,47 @@ final class LiveCameraViewController: UIViewController {
         view.bringSubviewToFront(statusLabel)
     }
 
+    private func setupExerciseSelector() {
+        exerciseSelector.selectedSegmentTintColor = UIColor.white.withAlphaComponent(0.92)
+        exerciseSelector.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        exerciseSelector.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
+        exerciseSelector.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .normal)
+        exerciseSelector.translatesAutoresizingMaskIntoConstraints = false
+        exerciseSelector.addTarget(self, action: #selector(exerciseSelectionChanged), for: .valueChanged)
+
+        view.addSubview(exerciseSelector)
+        NSLayoutConstraint.activate([
+            exerciseSelector.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 8),
+            exerciseSelector.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            exerciseSelector.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, multiplier: 0.66),
+        ])
+
+        view.bringSubviewToFront(exerciseSelector)
+    }
+
+    private func setupCameraToggleButton() {
+        var config = UIButton.Configuration.filled()
+        config.title = "Front"
+        config.image = UIImage(systemName: "camera.rotate")
+        config.imagePadding = 6
+        config.cornerStyle = .capsule
+        config.baseBackgroundColor = UIColor.black.withAlphaComponent(0.55)
+        config.baseForegroundColor = .white
+        config.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12)
+        cameraToggleButton.configuration = config
+        cameraToggleButton.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
+        cameraToggleButton.translatesAutoresizingMaskIntoConstraints = false
+        cameraToggleButton.addTarget(self, action: #selector(toggleCamera), for: .touchUpInside)
+
+        view.addSubview(cameraToggleButton)
+        NSLayoutConstraint.activate([
+            cameraToggleButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            cameraToggleButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+        ])
+
+        view.bringSubviewToFront(cameraToggleButton)
+    }
+
     private func setupDebugView() {
         debugView.isHidden = true
         debugView.isUserInteractionEnabled = false
@@ -178,7 +235,7 @@ final class LiveCameraViewController: UIViewController {
             tuningPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
             tuningPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
             tuningPanel.bottomAnchor.constraint(equalTo: debugView.topAnchor, constant: -10),
-            tuningPanel.topAnchor.constraint(greaterThanOrEqualTo: statusLabel.bottomAnchor, constant: 8),
+            tuningPanel.topAnchor.constraint(greaterThanOrEqualTo: exerciseSelector.bottomAnchor, constant: 8),
             tuningPanel.heightAnchor.constraint(greaterThanOrEqualToConstant: 240),
             preferredHeight,
         ])
@@ -190,6 +247,45 @@ final class LiveCameraViewController: UIViewController {
         debugView.isHidden.toggle()
         tuningPanel.isHidden.toggle()
         lastDebugUpdateTime = 0
+    }
+
+    @objc private func toggleCamera() {
+        let position = coordinator.toggleCameraPosition()
+        updateCameraToggleButton(for: position)
+        saveCameraPosition(position)
+    }
+
+    @objc private func exerciseSelectionChanged() {
+        let index = exerciseSelector.selectedSegmentIndex
+        guard ExerciseMode.allCases.indices.contains(index) else { return }
+        applyExerciseSelection(ExerciseMode.allCases[index], persistSelection: true)
+    }
+
+    private func applyExerciseSelection(_ exerciseMode: ExerciseMode, persistSelection: Bool) {
+        selectedExercise = exerciseMode
+        let tuning = loadSavedRepTuning(for: exerciseMode)
+        coordinator.setExercise(exerciseMode, configuration: tuning)
+        repCountLabel.text = "0"
+        debugView.updateConfiguration(tuning, exerciseMode: exerciseMode)
+        tuningPanel.apply(configuration: tuning, exerciseMode: exerciseMode)
+        updateExerciseSelector(for: exerciseMode)
+        lastDebugUpdateTime = 0
+        if persistSelection {
+            saveExerciseMode(exerciseMode)
+        }
+    }
+
+    private func updateExerciseSelector(for exerciseMode: ExerciseMode) {
+        if let index = ExerciseMode.allCases.firstIndex(of: exerciseMode) {
+            exerciseSelector.selectedSegmentIndex = index
+        }
+    }
+
+    private func updateCameraToggleButton(for position: AVCaptureDevice.Position) {
+        var config = cameraToggleButton.configuration ?? UIButton.Configuration.filled()
+        config.title = position == .front ? "Front" : "Back"
+        cameraToggleButton.configuration = config
+        cameraToggleButton.accessibilityLabel = position == .front ? "Switch to back camera" : "Switch to front camera"
     }
 
     private func currentInterfaceOrientation() -> UIInterfaceOrientation {
@@ -217,7 +313,7 @@ final class LiveCameraViewController: UIViewController {
                 let now = CACurrentMediaTime()
                 if now - lastDebugUpdateTime >= debugUpdateInterval {
                     lastDebugUpdateTime = now
-                    debugView.update(output: output)
+                    debugView.update(output: output, exerciseMode: model.exerciseMode)
                 }
             }
         }
@@ -230,21 +326,25 @@ final class LiveCameraViewController: UIViewController {
         }
     }
 
-    private func scheduleConfigurationUpdate(_ configuration: RepCountingConfiguration) {
+    private func scheduleConfigurationUpdate(
+        _ configuration: RepCountingConfiguration,
+        for exerciseMode: ExerciseMode
+    ) {
         pendingConfigurationUpdate?.cancel()
 
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
+            guard self.selectedExercise == exerciseMode else { return }
             self.coordinator.updateRepCountingConfiguration(configuration)
-            self.debugView.updateConfiguration(configuration)
-            self.saveRepTuning(configuration)
+            self.debugView.updateConfiguration(configuration, exerciseMode: exerciseMode)
+            self.saveRepTuning(configuration, for: exerciseMode)
         }
 
         pendingConfigurationUpdate = work
         DispatchQueue.main.asyncAfter(deadline: .now() + configurationDebounceInterval, execute: work)
     }
 
-    private func saveRepTuning(_ configuration: RepCountingConfiguration) {
+    private func saveRepTuning(_ configuration: RepCountingConfiguration, for exerciseMode: ExerciseMode) {
         let values: [String: Double] = [
             "armingThreshold": Double(configuration.armingThreshold),
             "minPeakHeight": Double(configuration.minPeakHeight),
@@ -261,17 +361,50 @@ final class LiveCameraViewController: UIViewController {
             "squatKneeLockoutFlexionDegrees": Double(configuration.squatKneeLockoutFlexionDegrees),
             "squatHipLockoutFlexionDegrees": Double(configuration.squatHipLockoutFlexionDegrees),
             "squatMaxSideAsymmetryDegrees": Double(configuration.squatMaxSideAsymmetryDegrees),
+            "curlTopFlexionDegrees": Double(configuration.curlTopFlexionDegrees),
+            "curlLockoutFlexionDegrees": Double(configuration.curlLockoutFlexionDegrees),
             "inactivityResetSeconds": configuration.inactivityResetSeconds,
             "activityDeltaThreshold": Double(configuration.activityDeltaThreshold),
             "spikeMaxDelta": Double(configuration.spikeMaxDelta),
             "emaAlpha": Double(configuration.emaAlpha),
         ]
-        UserDefaults.standard.set(values, forKey: Self.tuningStorageKey)
+        UserDefaults.standard.set(values, forKey: tuningStorageKey(for: exerciseMode))
     }
 
-    private func loadSavedRepTuning() -> RepCountingConfiguration {
+    private func saveExerciseMode(_ exerciseMode: ExerciseMode) {
+        UserDefaults.standard.set(exerciseMode.rawValue, forKey: Self.exerciseModeStorageKey)
+    }
+
+    private func loadSavedExerciseMode() -> ExerciseMode {
+        guard let raw = UserDefaults.standard.string(forKey: Self.exerciseModeStorageKey) else {
+            return .squat
+        }
+        return ExerciseMode(rawValue: raw) ?? .squat
+    }
+
+    private static func tuningStorageKey(for exerciseMode: ExerciseMode) -> String {
+        "\(tuningStoragePrefix).\(exerciseMode.rawValue)"
+    }
+
+    private func tuningStorageKey(for exerciseMode: ExerciseMode) -> String {
+        Self.tuningStorageKey(for: exerciseMode)
+    }
+
+    private func saveCameraPosition(_ position: AVCaptureDevice.Position) {
+        let rawValue = position == .back ? "back" : "front"
+        UserDefaults.standard.set(rawValue, forKey: Self.cameraPositionStorageKey)
+    }
+
+    private func loadSavedCameraPosition() -> AVCaptureDevice.Position {
+        guard let rawValue = UserDefaults.standard.string(forKey: Self.cameraPositionStorageKey) else {
+            return .front
+        }
+        return rawValue == "back" ? .back : .front
+    }
+
+    private func loadSavedRepTuning(for exerciseMode: ExerciseMode) -> RepCountingConfiguration {
         guard
-            let values = UserDefaults.standard.dictionary(forKey: Self.tuningStorageKey),
+            let values = UserDefaults.standard.dictionary(forKey: tuningStorageKey(for: exerciseMode)),
             let armingThreshold = values["armingThreshold"] as? Double,
             let minPeakHeight = values["minPeakHeight"] as? Double,
             let minValleyDepth = values["minValleyDepth"] as? Double,
@@ -285,30 +418,37 @@ final class LiveCameraViewController: UIViewController {
             let spikeMaxDelta = values["spikeMaxDelta"] as? Double,
             let emaAlpha = values["emaAlpha"] as? Double
         else {
-            return LiveCameraCoordinator.defaultRepTuning
+            return LiveCameraCoordinator.defaultRepTuning(for: exerciseMode)
         }
 
+        let defaults = LiveCameraCoordinator.defaultRepTuning(for: exerciseMode)
         let squatDescendEntryThreshold =
             (values["squatDescendEntryThreshold"] as? Double)
-            ?? Double(LiveCameraCoordinator.defaultRepTuning.squatDescendEntryThreshold)
+            ?? Double(defaults.squatDescendEntryThreshold)
         let squatStandLockoutThreshold =
             (values["squatStandLockoutThreshold"] as? Double)
-            ?? Double(LiveCameraCoordinator.defaultRepTuning.squatStandLockoutThreshold)
+            ?? Double(defaults.squatStandLockoutThreshold)
         let squatKneeBottomFlexionDegrees =
             (values["squatKneeBottomFlexionDegrees"] as? Double)
-            ?? Double(LiveCameraCoordinator.defaultRepTuning.squatKneeBottomFlexionDegrees)
+            ?? Double(defaults.squatKneeBottomFlexionDegrees)
         let squatHipBottomFlexionDegrees =
             (values["squatHipBottomFlexionDegrees"] as? Double)
-            ?? Double(LiveCameraCoordinator.defaultRepTuning.squatHipBottomFlexionDegrees)
+            ?? Double(defaults.squatHipBottomFlexionDegrees)
         let squatKneeLockoutFlexionDegrees =
             (values["squatKneeLockoutFlexionDegrees"] as? Double)
-            ?? Double(LiveCameraCoordinator.defaultRepTuning.squatKneeLockoutFlexionDegrees)
+            ?? Double(defaults.squatKneeLockoutFlexionDegrees)
         let squatHipLockoutFlexionDegrees =
             (values["squatHipLockoutFlexionDegrees"] as? Double)
-            ?? Double(LiveCameraCoordinator.defaultRepTuning.squatHipLockoutFlexionDegrees)
+            ?? Double(defaults.squatHipLockoutFlexionDegrees)
         let squatMaxSideAsymmetryDegrees =
             (values["squatMaxSideAsymmetryDegrees"] as? Double)
-            ?? Double(LiveCameraCoordinator.defaultRepTuning.squatMaxSideAsymmetryDegrees)
+            ?? Double(defaults.squatMaxSideAsymmetryDegrees)
+        let curlTopFlexionDegrees =
+            (values["curlTopFlexionDegrees"] as? Double)
+            ?? Double(defaults.curlTopFlexionDegrees)
+        let curlLockoutFlexionDegrees =
+            (values["curlLockoutFlexionDegrees"] as? Double)
+            ?? Double(defaults.curlLockoutFlexionDegrees)
 
         return RepCountingConfiguration(
             armingThreshold: CGFloat(armingThreshold),
@@ -327,6 +467,8 @@ final class LiveCameraViewController: UIViewController {
             squatKneeLockoutFlexionDegrees: CGFloat(squatKneeLockoutFlexionDegrees),
             squatHipLockoutFlexionDegrees: CGFloat(squatHipLockoutFlexionDegrees),
             squatMaxSideAsymmetryDegrees: CGFloat(squatMaxSideAsymmetryDegrees),
+            curlTopFlexionDegrees: CGFloat(curlTopFlexionDegrees),
+            curlLockoutFlexionDegrees: CGFloat(curlLockoutFlexionDegrees),
             inactivityResetSeconds: inactivityResetSeconds,
             activityDeltaThreshold: CGFloat(activityDeltaThreshold),
             spikeMaxDelta: CGFloat(spikeMaxDelta),

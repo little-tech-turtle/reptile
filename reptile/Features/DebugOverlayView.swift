@@ -8,12 +8,15 @@ import CameraKit
 import Vision
 
 final class DebugOverlayView: UIView {
+    private var exerciseMode: ExerciseMode = .squat
     private var history: [CGFloat] = []
     private var currentMetric: CGFloat? = nil
     private var repCount: Int = 0
     private var stateName: String = "--"
     private var jointCount: Int = 0
     private var trackedJointName: String = "--"
+    private var upThreshold: CGFloat = 0.20
+    private var downThreshold: CGFloat = 0.92
     private var descendEntryThreshold: CGFloat = 0.12
     private var bottomThreshold: CGFloat = 0.62
     private var standLockoutThreshold: CGFloat = 0.10
@@ -28,8 +31,17 @@ final class DebugOverlayView: UIView {
     private var rightKneeFlexionDegrees: CGFloat?
     private var leftHipFlexionDegrees: CGFloat?
     private var rightHipFlexionDegrees: CGFloat?
+    private var curlTopFlexionDegrees: CGFloat = 95
+    private var curlLockoutFlexionDegrees: CGFloat = 18
+    private var currentElbowFlexionDegrees: CGFloat?
+    private var leftElbowFlexionDegrees: CGFloat?
+    private var rightElbowFlexionDegrees: CGFloat?
+    private var activeCurlSide: CurlActiveSide?
 
-    func updateConfiguration(_ configuration: RepCountingConfiguration) {
+    func updateConfiguration(_ configuration: RepCountingConfiguration, exerciseMode: ExerciseMode) {
+        self.exerciseMode = exerciseMode
+        upThreshold = configuration.upThreshold
+        downThreshold = configuration.downThreshold
         descendEntryThreshold = configuration.squatDescendEntryThreshold
         bottomThreshold = configuration.downThreshold
         standLockoutThreshold = configuration.squatStandLockoutThreshold
@@ -38,10 +50,13 @@ final class DebugOverlayView: UIView {
         hipBottomFlexionDegrees = configuration.squatHipBottomFlexionDegrees
         kneeLockoutFlexionDegrees = configuration.squatKneeLockoutFlexionDegrees
         hipLockoutFlexionDegrees = configuration.squatHipLockoutFlexionDegrees
+        curlTopFlexionDegrees = configuration.curlTopFlexionDegrees
+        curlLockoutFlexionDegrees = configuration.curlLockoutFlexionDegrees
         setNeedsDisplay()
     }
 
-    func update(output: RepCounterOutput) {
+    func update(output: RepCounterOutput, exerciseMode: ExerciseMode) {
+        self.exerciseMode = exerciseMode
         if let m = output.currentMetric {
             currentMetric = m
             history.append(m)
@@ -57,6 +72,10 @@ final class DebugOverlayView: UIView {
         rightKneeFlexionDegrees = output.squatFlexionMetrics?.rightKneeFlexionDegrees
         leftHipFlexionDegrees = output.squatFlexionMetrics?.leftHipFlexionDegrees
         rightHipFlexionDegrees = output.squatFlexionMetrics?.rightHipFlexionDegrees
+        currentElbowFlexionDegrees = output.curlFlexionMetrics?.elbowFlexionDegrees
+        leftElbowFlexionDegrees = output.curlFlexionMetrics?.leftElbowFlexionDegrees
+        rightElbowFlexionDegrees = output.curlFlexionMetrics?.rightElbowFlexionDegrees
+        activeCurlSide = output.curlFlexionMetrics?.activeSide
         setNeedsDisplay()
     }
 
@@ -86,11 +105,19 @@ final class DebugOverlayView: UIView {
     }
 
     private func drawThresholds(in rect: CGRect, ctx: CGContext) {
-        let thresholds: [(value: CGFloat, color: UIColor, label: String)] = [
-            (standLockoutThreshold, .systemGreen, "lockout"),
-            (descendEntryThreshold, .systemOrange, "entry"),
-            (bottomThreshold, .systemRed, "bottom"),
-        ]
+        let thresholds: [(value: CGFloat, color: UIColor, label: String)]
+        if exerciseMode == .squat {
+            thresholds = [
+                (standLockoutThreshold, .systemGreen, "lockout"),
+                (descendEntryThreshold, .systemOrange, "entry"),
+                (bottomThreshold, .systemRed, "bottom"),
+            ]
+        } else {
+            thresholds = [
+                (downThreshold, .systemGreen, "lockout"),
+                (upThreshold, .systemRed, "top"),
+            ]
+        }
 
         let dash: [CGFloat] = [6, 4]
         let labelFont = UIFont.systemFont(ofSize: 10, weight: .medium)
@@ -154,13 +181,23 @@ final class DebugOverlayView: UIView {
 
     private func drawStats(in rect: CGRect) {
         let metricStr = currentMetric.map { String(format: "%.2f", $0) } ?? "--"
-        let kneeCurrent = currentKneeFlexionDegrees.map { String(format: "%.0f", $0) } ?? "--"
-        let hipCurrent = currentHipFlexionDegrees.map { String(format: "%.0f", $0) } ?? "--"
-        let kneePair = "L\(formatOptionalDegrees(leftKneeFlexionDegrees))/R\(formatOptionalDegrees(rightKneeFlexionDegrees))"
-        let hipPair = "L\(formatOptionalDegrees(leftHipFlexionDegrees))/R\(formatOptionalDegrees(rightHipFlexionDegrees))"
-        let text = "metric: \(metricStr)   state: \(stateName)   reps: \(repCount)   tracked: \(trackedJointName)   joints: \(jointCount)\n" +
+        let text: String
+        if exerciseMode == .squat {
+            let kneeCurrent = currentKneeFlexionDegrees.map { String(format: "%.0f", $0) } ?? "--"
+            let hipCurrent = currentHipFlexionDegrees.map { String(format: "%.0f", $0) } ?? "--"
+            let kneePair = "L\(formatOptionalDegrees(leftKneeFlexionDegrees))/R\(formatOptionalDegrees(rightKneeFlexionDegrees))"
+            let hipPair = "L\(formatOptionalDegrees(leftHipFlexionDegrees))/R\(formatOptionalDegrees(rightHipFlexionDegrees))"
+            text = "exercise: squat   metric: \(metricStr)   state: \(stateName)   reps: \(repCount)   tracked: \(trackedJointName)   joints: \(jointCount)\n" +
                    "knee: \(kneeCurrent)° (\(kneePair))  hip: \(hipCurrent)° (\(hipPair))\n" +
                    "bottom>= knee \(String(format: "%.0f", kneeBottomFlexionDegrees))° / hip \(String(format: "%.0f", hipBottomFlexionDegrees))°   lockout<= knee \(String(format: "%.0f", kneeLockoutFlexionDegrees))° / hip \(String(format: "%.0f", hipLockoutFlexionDegrees))°   amp: \(String(format: "%.2f", minAmplitude))"
+        } else {
+            let elbowCurrent = currentElbowFlexionDegrees.map { String(format: "%.0f", $0) } ?? "--"
+            let elbowPair = "L\(formatOptionalDegrees(leftElbowFlexionDegrees))/R\(formatOptionalDegrees(rightElbowFlexionDegrees))"
+            let side = activeCurlSide?.rawValue ?? "--"
+            text = "exercise: curl   metric: \(metricStr)   state: \(stateName)   reps: \(repCount)   tracked: \(trackedJointName)   joints: \(jointCount)\n" +
+                   "elbow: \(elbowCurrent)° (\(elbowPair))   active: \(side)\n" +
+                   "top>= \(String(format: "%.0f", curlTopFlexionDegrees))°   lockout<= \(String(format: "%.0f", curlLockoutFlexionDegrees))°   amp: \(String(format: "%.2f", minAmplitude))"
+        }
         let attrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: UIColor.white,
             .font: UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),

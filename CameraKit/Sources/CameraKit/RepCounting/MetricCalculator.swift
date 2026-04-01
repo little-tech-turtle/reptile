@@ -899,3 +899,171 @@ public final class SquatJointFlexion3DMetricCalculator: MetricCalculator {
         names.filter { points[$0] != nil }
     }
 }
+
+public enum CurlActiveSide: String, Sendable {
+    case left
+    case right
+    case both
+}
+
+public struct CurlFlexionMetrics: Sendable {
+    public let elbowFlexionDegrees: CGFloat?
+    public let leftElbowFlexionDegrees: CGFloat?
+    public let rightElbowFlexionDegrees: CGFloat?
+    public let activeSide: CurlActiveSide?
+
+    public init(
+        elbowFlexionDegrees: CGFloat?,
+        leftElbowFlexionDegrees: CGFloat?,
+        rightElbowFlexionDegrees: CGFloat?,
+        activeSide: CurlActiveSide?
+    ) {
+        self.elbowFlexionDegrees = elbowFlexionDegrees
+        self.leftElbowFlexionDegrees = leftElbowFlexionDegrees
+        self.rightElbowFlexionDegrees = rightElbowFlexionDegrees
+        self.activeSide = activeSide
+    }
+}
+
+/// 3D bicep-curl metric derived from elbow flexion angles.
+///
+/// Output metric is `0...1`, where `0` is arm lockout and `1` is top curl.
+/// If both arms are visible, the side with greater flexion drives the metric
+/// (single-arm tolerant counting).
+public final class BicepCurlFlexion3DMetricCalculator: MetricCalculator {
+    private let curlTopFlexionDegrees: CGFloat
+    private let curlLockoutFlexionDegrees: CGFloat
+    private let bilateralBlendToleranceDegrees: CGFloat
+
+    public init(
+        curlTopFlexionDegrees: CGFloat = 95,
+        curlLockoutFlexionDegrees: CGFloat = 18,
+        bilateralBlendToleranceDegrees: CGFloat = 10
+    ) {
+        self.curlTopFlexionDegrees = max(curlTopFlexionDegrees, curlLockoutFlexionDegrees + 5)
+        self.curlLockoutFlexionDegrees = max(0, curlLockoutFlexionDegrees)
+        self.bilateralBlendToleranceDegrees = max(0, bilateralBlendToleranceDegrees)
+    }
+
+    public func calculate(from frame: PoseFrame) -> CGFloat? {
+        guard let flexion = flexionMetrics(from: frame),
+              let elbowFlexion = flexion.elbowFlexionDegrees else {
+            return nil
+        }
+
+        let range = max(curlTopFlexionDegrees - curlLockoutFlexionDegrees, 0.0001)
+        let normalized = (elbowFlexion - curlLockoutFlexionDegrees) / range
+        return min(1, max(0, normalized))
+    }
+
+    public func trackedJoints(from frame: PoseFrame) -> [VNHumanBodyPose3DObservation.JointName] {
+        guard let metrics = flexionMetrics(from: frame),
+              let side = metrics.activeSide else {
+            return []
+        }
+
+        switch side {
+        case .left:
+            return available(in: frame.positions3D, names: [.leftShoulder, .leftElbow, .leftWrist])
+        case .right:
+            return available(in: frame.positions3D, names: [.rightShoulder, .rightElbow, .rightWrist])
+        case .both:
+            return available(in: frame.positions3D, names: [.leftShoulder, .leftElbow, .leftWrist, .rightShoulder, .rightElbow, .rightWrist])
+        }
+    }
+
+    public func flexionMetrics(from frame: PoseFrame) -> CurlFlexionMetrics? {
+        let points = frame.positions3D
+        let left = elbowFlexion(for: .left, points: points)
+        let right = elbowFlexion(for: .right, points: points)
+
+        let active: CurlActiveSide?
+        let elbowFlexion: CGFloat?
+
+        switch (left, right) {
+        case let (l?, r?):
+            if abs(l - r) <= bilateralBlendToleranceDegrees {
+                active = .both
+                elbowFlexion = (l + r) / 2
+            } else if l > r {
+                active = .left
+                elbowFlexion = l
+            } else {
+                active = .right
+                elbowFlexion = r
+            }
+        case let (l?, nil):
+            active = .left
+            elbowFlexion = l
+        case let (nil, r?):
+            active = .right
+            elbowFlexion = r
+        default:
+            active = nil
+            elbowFlexion = nil
+        }
+
+        guard left != nil || right != nil else { return nil }
+        return CurlFlexionMetrics(
+            elbowFlexionDegrees: elbowFlexion,
+            leftElbowFlexionDegrees: left,
+            rightElbowFlexionDegrees: right,
+            activeSide: active
+        )
+    }
+
+    private enum Side {
+        case left
+        case right
+    }
+
+    private func elbowFlexion(
+        for side: Side,
+        points: [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>]
+    ) -> CGFloat? {
+        let joints = armJoints(side)
+        guard let shoulder = points[joints.shoulder],
+              let elbow = points[joints.elbow],
+              let wrist = points[joints.wrist],
+              let angle = jointAngle(a: shoulder, vertex: elbow, b: wrist) else {
+            return nil
+        }
+        return min(180, max(0, 180 - angle))
+    }
+
+    private func armJoints(
+        _ side: Side
+    ) -> (
+        shoulder: VNHumanBodyPose3DObservation.JointName,
+        elbow: VNHumanBodyPose3DObservation.JointName,
+        wrist: VNHumanBodyPose3DObservation.JointName
+    ) {
+        switch side {
+        case .left:
+            return (.leftShoulder, .leftElbow, .leftWrist)
+        case .right:
+            return (.rightShoulder, .rightElbow, .rightWrist)
+        }
+    }
+
+    private func jointAngle(a: SIMD3<Float>, vertex: SIMD3<Float>, b: SIMD3<Float>) -> CGFloat? {
+        let va = SIMD3<Float>(a.x - vertex.x, a.y - vertex.y, a.z - vertex.z)
+        let vb = SIMD3<Float>(b.x - vertex.x, b.y - vertex.y, b.z - vertex.z)
+
+        let ma = simd_length(va)
+        let mb = simd_length(vb)
+        guard ma > 0.0001, mb > 0.0001 else { return nil }
+
+        let dot = simd_dot(va, vb)
+        let cosTheta = max(-1 as Float, min(1 as Float, dot / (ma * mb)))
+        let radians = acos(cosTheta)
+        return CGFloat(radians * 180 / .pi)
+    }
+
+    private func available(
+        in points: [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>],
+        names: [VNHumanBodyPose3DObservation.JointName]
+    ) -> [VNHumanBodyPose3DObservation.JointName] {
+        names.filter { points[$0] != nil }
+    }
+}

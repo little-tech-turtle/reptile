@@ -76,6 +76,13 @@ public final class LivePipeline {
         repCounter.updateConfiguration(configuration)
     }
 
+    public func setExerciseProfile(
+        _ exerciseProfile: any ExerciseProfile,
+        configuration: RepCountingConfiguration
+    ) {
+        repCounter.setExerciseProfile(exerciseProfile, configuration: configuration)
+    }
+
     private func wirePipeline() {
         cameraSession.frames
             .sink { [weak self] frame in

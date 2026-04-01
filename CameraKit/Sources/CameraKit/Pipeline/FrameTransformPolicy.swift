@@ -1,8 +1,27 @@
 import CoreGraphics
 import ImageIO
+import AVFoundation
 import UIKit
 
 public enum FrameTransformPolicy {
+    public static func previewMirrored(
+        for cameraPosition: AVCaptureDevice.Position
+    ) -> Bool {
+        cameraPosition == .front
+    }
+
+    public static func visionMirroredInput(
+        for _: AVCaptureDevice.Position
+    ) -> Bool {
+        false
+    }
+
+    public static func mirroredInput(
+        for cameraPosition: AVCaptureDevice.Position
+    ) -> Bool {
+        previewMirrored(for: cameraPosition)
+    }
+
     public static func visionOrientation(
         for interfaceOrientation: UIInterfaceOrientation,
         mirrored: Bool
