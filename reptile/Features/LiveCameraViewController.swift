@@ -23,6 +23,7 @@ final class LiveCameraViewController: UIViewController {
     private let overlayView = SkeletonOverlayView()
     private let debugView = DebugOverlayView()
     private let tuningPanel = RepTuningPanelView()
+    private let repFeedbackPlayer = RepFeedbackPlayer()
 
     private let coordinator = LiveCameraCoordinator()
     private var selectedExercise: ExerciseMode = .squat
@@ -32,6 +33,7 @@ final class LiveCameraViewController: UIViewController {
     private let debugUpdateInterval: CFTimeInterval = 1.0 / 12.0
     private var lastDebugUpdateTime: CFTimeInterval = 0
     private var isAdjustingTuningControls = false
+    private var lastRepCountForFeedback = 0
     private lazy var debugToggleGesture: UITapGestureRecognizer = {
         let gesture = UITapGestureRecognizer(target: self, action: #selector(toggleDebug))
         gesture.numberOfTapsRequired = 2
@@ -266,6 +268,7 @@ final class LiveCameraViewController: UIViewController {
         let tuning = loadSavedRepTuning(for: exerciseMode)
         coordinator.setExercise(exerciseMode, configuration: tuning)
         repCountLabel.text = "0"
+        lastRepCountForFeedback = 0
         debugView.updateConfiguration(tuning, exerciseMode: exerciseMode)
         tuningPanel.apply(configuration: tuning, exerciseMode: exerciseMode)
         updateExerciseSelector(for: exerciseMode)
@@ -300,9 +303,14 @@ final class LiveCameraViewController: UIViewController {
         overlayView.highlightedJoints = model.trackedJoints
 
         if let output = model.output {
+            if output.repCount > lastRepCountForFeedback {
+                repFeedbackPlayer.playRepSound()
+            }
+            lastRepCountForFeedback = output.repCount
             repCountLabel.text = "\(output.repCount)"
         } else {
             repCountLabel.text = "0"
+            lastRepCountForFeedback = 0
         }
 
         statusLabel.text = model.statusText
