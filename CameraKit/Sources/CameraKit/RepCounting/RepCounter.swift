@@ -193,6 +193,193 @@ public struct CycleBasedRepCounter: RepCounter {
     }
 }
 
+/// Counts bicep curls using a phase-state machine on a normalized flexion metric.
+///
+/// Expected metric range is `0...1` where lower values are arm extension and
+/// higher values are peak curl contraction.
+public struct CurlPhaseRepCounter: RepCounter {
+    private enum Phase {
+        case extended
+        case curling
+        case contracted
+        case lowering
+    }
+
+    public private(set) var count: Int = 0
+    public private(set) var state: RepCounterState = .down
+    public var consumesPeakEvents: Bool { false }
+
+    private var minTimeBetweenReps: Double
+    private var minAmplitude: CGFloat
+    private var upThreshold: CGFloat
+    private var downThreshold: CGFloat
+    private var inactivityResetSeconds: Double
+    private var activityDeltaThreshold: CGFloat
+
+    private let movementDeltaThreshold: CGFloat
+    private let minCycleDuration: Double
+
+    private var phase: Phase = .extended
+    private var lastObservedMetric: CGFloat?
+    private var lastActivityTime: CMTime?
+    private var idleResetArmed: Bool = true
+
+    private var cycleStartTime: CMTime?
+    private var cycleStartValue: CGFloat?
+    private var cycleMaxValue: CGFloat?
+    private var lastRepTime: CMTime = .zero
+
+    public init(
+        minTimeBetweenReps: Double = 0.5,
+        minAmplitude: CGFloat = 0.20,
+        upThreshold: CGFloat = 0.65,
+        downThreshold: CGFloat = 0.25,
+        inactivityResetSeconds: Double = 3.0,
+        activityDeltaThreshold: CGFloat = 0.015,
+        movementDeltaThreshold: CGFloat = 0.010,
+        minCycleDuration: Double = 0.35
+    ) {
+        self.minTimeBetweenReps = minTimeBetweenReps
+        self.minAmplitude = minAmplitude
+        self.upThreshold = upThreshold
+        self.downThreshold = downThreshold
+        self.inactivityResetSeconds = inactivityResetSeconds
+        self.activityDeltaThreshold = activityDeltaThreshold
+        self.movementDeltaThreshold = movementDeltaThreshold
+        self.minCycleDuration = minCycleDuration
+    }
+
+    public mutating func updateTuning(_ tuning: RepCounterTuning) {
+        minTimeBetweenReps = tuning.minTimeBetweenReps
+        minAmplitude = tuning.minAmplitude
+        upThreshold = tuning.upThreshold
+        downThreshold = tuning.downThreshold
+        inactivityResetSeconds = tuning.inactivityResetSeconds
+        activityDeltaThreshold = tuning.activityDeltaThreshold
+    }
+
+    public mutating func ingestSample(timestamp: CMTime, metricValue: CGFloat) {
+        let previous = lastObservedMetric ?? metricValue
+        let delta = abs(metricValue - previous)
+
+        if lastObservedMetric == nil || delta >= activityDeltaThreshold {
+            lastActivityTime = timestamp
+            idleResetArmed = true
+        }
+
+        lastObservedMetric = metricValue
+        updateState(metricValue: metricValue)
+
+        guard !handleIdleResetIfNeeded(timestamp: timestamp) else { return }
+
+        let rising = metricValue > previous + movementDeltaThreshold
+        let falling = metricValue < previous - movementDeltaThreshold
+
+        switch phase {
+        case .extended:
+            if metricValue >= downThreshold, rising {
+                phase = .curling
+                cycleStartTime = timestamp
+                cycleStartValue = previous
+                cycleMaxValue = metricValue
+            }
+
+        case .curling:
+            cycleMaxValue = max(cycleMaxValue ?? metricValue, metricValue)
+
+            if metricValue >= upThreshold {
+                phase = .contracted
+            } else if falling, metricValue <= downThreshold {
+                clearCycle()
+                phase = .extended
+            }
+
+        case .contracted:
+            cycleMaxValue = max(cycleMaxValue ?? metricValue, metricValue)
+            if falling, metricValue < upThreshold - movementDeltaThreshold {
+                phase = .lowering
+            }
+
+        case .lowering:
+            cycleMaxValue = max(cycleMaxValue ?? metricValue, metricValue)
+
+            if metricValue >= upThreshold {
+                phase = .contracted
+                return
+            }
+
+            guard metricValue <= downThreshold else { return }
+
+            let startTime = cycleStartTime ?? timestamp
+            let startValue = cycleStartValue ?? metricValue
+            let peakValue = cycleMaxValue ?? metricValue
+            let amplitude = peakValue - startValue
+            let cycleDuration = CMTimeGetSeconds(timestamp - startTime)
+            let timeSinceLastRep = CMTimeGetSeconds(timestamp - lastRepTime)
+
+            if amplitude >= minAmplitude,
+               cycleDuration >= minCycleDuration,
+               timeSinceLastRep > minTimeBetweenReps {
+                count += 1
+                lastRepTime = timestamp
+                let capturedCount = count
+                logger.info("Curl rep counted — total=\(capturedCount) amplitude=\(amplitude, format: .fixed(precision: 3)) duration=\(cycleDuration, format: .fixed(precision: 2))s")
+            }
+
+            clearCycle()
+            phase = .extended
+        }
+    }
+
+    public mutating func processPeak(_ peak: PeakType, timestamp: CMTime, metricValue: CGFloat) {}
+
+    public mutating func reset() {
+        count = 0
+        state = .down
+        phase = .extended
+
+        lastObservedMetric = nil
+        lastActivityTime = nil
+        idleResetArmed = true
+
+        cycleStartTime = nil
+        cycleStartValue = nil
+        cycleMaxValue = nil
+        lastRepTime = .zero
+    }
+
+    private mutating func updateState(metricValue: CGFloat) {
+        if metricValue >= upThreshold {
+            state = .up
+        } else if metricValue <= downThreshold {
+            state = .down
+        } else {
+            state = .transition
+        }
+    }
+
+    private mutating func handleIdleResetIfNeeded(timestamp: CMTime) -> Bool {
+        guard let activityTime = lastActivityTime else { return false }
+
+        let idleSeconds = CMTimeGetSeconds(timestamp - activityTime)
+        guard idleSeconds >= inactivityResetSeconds, idleResetArmed else { return false }
+
+        if count > 0 || phase != .extended {
+            logger.info("Curl counter reset after idle timeout (\(idleSeconds, format: .fixed(precision: 2))s)")
+            reset()
+        }
+
+        idleResetArmed = false
+        return true
+    }
+
+    private mutating func clearCycle() {
+        cycleStartTime = nil
+        cycleStartValue = nil
+        cycleMaxValue = nil
+    }
+}
+
 /// Counts full-depth squats with a phase-state machine.
 ///
 /// Expected metric range is `0...1` where lower values are standing and higher

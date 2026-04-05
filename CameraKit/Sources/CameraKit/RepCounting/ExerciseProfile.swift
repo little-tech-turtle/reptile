@@ -76,7 +76,7 @@ public struct BicepCurlExerciseProfile: ExerciseProfile {
     }
 
     public func makeRepCounter(configuration: RepCountingConfiguration) -> any RepCounter {
-        CycleBasedRepCounter(
+        CurlPhaseRepCounter(
             minTimeBetweenReps: configuration.minTimeBetweenReps,
             minAmplitude: configuration.minAmplitude,
             upThreshold: configuration.upThreshold,

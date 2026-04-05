@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import CoreMedia
 import Vision
 import simd
 
@@ -934,15 +935,25 @@ public final class BicepCurlFlexion3DMetricCalculator: MetricCalculator {
     private let curlTopFlexionDegrees: CGFloat
     private let curlLockoutFlexionDegrees: CGFloat
     private let bilateralBlendToleranceDegrees: CGFloat
+    private let sideLockActivationFlexionDegrees: CGFloat
+    private let sideUnlockFlexionDegrees: CGFloat
+
+    private var lockedSide: Side?
+    private var cachedTimestamp: CMTime?
+    private var cachedMetrics: CurlFlexionMetrics?
 
     public init(
         curlTopFlexionDegrees: CGFloat = 95,
         curlLockoutFlexionDegrees: CGFloat = 18,
-        bilateralBlendToleranceDegrees: CGFloat = 10
+        bilateralBlendToleranceDegrees: CGFloat = 10,
+        sideLockActivationFlexionDegrees: CGFloat = 35,
+        sideUnlockFlexionDegrees: CGFloat = 22
     ) {
         self.curlTopFlexionDegrees = max(curlTopFlexionDegrees, curlLockoutFlexionDegrees + 5)
         self.curlLockoutFlexionDegrees = max(0, curlLockoutFlexionDegrees)
         self.bilateralBlendToleranceDegrees = max(0, bilateralBlendToleranceDegrees)
+        self.sideLockActivationFlexionDegrees = max(0, sideLockActivationFlexionDegrees)
+        self.sideUnlockFlexionDegrees = max(0, sideUnlockFlexionDegrees)
     }
 
     public func calculate(from frame: PoseFrame) -> CGFloat? {
@@ -973,48 +984,113 @@ public final class BicepCurlFlexion3DMetricCalculator: MetricCalculator {
     }
 
     public func flexionMetrics(from frame: PoseFrame) -> CurlFlexionMetrics? {
+        if let cachedTimestamp, cachedTimestamp == frame.timestamp {
+            return cachedMetrics
+        }
+
         let points = frame.positions3D
         let left = elbowFlexion(for: .left, points: points)
         let right = elbowFlexion(for: .right, points: points)
 
-        let active: CurlActiveSide?
-        let elbowFlexion: CGFloat?
+        let selection = selectActiveSide(left: left, right: right)
+        let metrics: CurlFlexionMetrics?
 
-        switch (left, right) {
-        case let (l?, r?):
-            if abs(l - r) <= bilateralBlendToleranceDegrees {
-                active = .both
-                elbowFlexion = (l + r) / 2
-            } else if l > r {
-                active = .left
-                elbowFlexion = l
-            } else {
-                active = .right
-                elbowFlexion = r
-            }
-        case let (l?, nil):
-            active = .left
-            elbowFlexion = l
-        case let (nil, r?):
-            active = .right
-            elbowFlexion = r
-        default:
-            active = nil
-            elbowFlexion = nil
+        if left == nil, right == nil {
+            metrics = nil
+        } else {
+            metrics = CurlFlexionMetrics(
+                elbowFlexionDegrees: selection.elbowFlexion,
+                leftElbowFlexionDegrees: left,
+                rightElbowFlexionDegrees: right,
+                activeSide: selection.active
+            )
         }
 
-        guard left != nil || right != nil else { return nil }
-        return CurlFlexionMetrics(
-            elbowFlexionDegrees: elbowFlexion,
-            leftElbowFlexionDegrees: left,
-            rightElbowFlexionDegrees: right,
-            activeSide: active
-        )
+        cachedTimestamp = frame.timestamp
+        cachedMetrics = metrics
+        return metrics
     }
 
     private enum Side {
         case left
         case right
+    }
+
+    private struct SideSelection {
+        let active: CurlActiveSide?
+        let elbowFlexion: CGFloat?
+    }
+
+    private func selectActiveSide(left: CGFloat?, right: CGFloat?) -> SideSelection {
+        if let lockedSide {
+            let lockedValue = value(for: lockedSide, left: left, right: right)
+
+            if let lockedValue {
+                if lockedValue > sideUnlockFlexionDegrees {
+                    return SideSelection(active: activeSide(for: lockedSide), elbowFlexion: lockedValue)
+                }
+                self.lockedSide = nil
+            } else {
+                self.lockedSide = nil
+            }
+        }
+
+        let unlockedSelection = selectUnlockedSide(left: left, right: right)
+
+        if let active = unlockedSelection.active,
+           let elbowFlexion = unlockedSelection.elbowFlexion,
+           elbowFlexion >= sideLockActivationFlexionDegrees {
+            switch active {
+            case .left:
+                lockedSide = .left
+            case .right:
+                lockedSide = .right
+            case .both:
+                break
+            }
+        }
+
+        return unlockedSelection
+    }
+
+    private func selectUnlockedSide(left: CGFloat?, right: CGFloat?) -> SideSelection {
+        switch (left, right) {
+        case let (l?, r?):
+            if abs(l - r) <= bilateralBlendToleranceDegrees {
+                return SideSelection(active: .both, elbowFlexion: (l + r) / 2)
+            }
+            if l > r {
+                return SideSelection(active: .left, elbowFlexion: l)
+            }
+            return SideSelection(active: .right, elbowFlexion: r)
+
+        case let (l?, nil):
+            return SideSelection(active: .left, elbowFlexion: l)
+
+        case let (nil, r?):
+            return SideSelection(active: .right, elbowFlexion: r)
+
+        default:
+            return SideSelection(active: nil, elbowFlexion: nil)
+        }
+    }
+
+    private func value(for side: Side, left: CGFloat?, right: CGFloat?) -> CGFloat? {
+        switch side {
+        case .left:
+            return left
+        case .right:
+            return right
+        }
+    }
+
+    private func activeSide(for side: Side) -> CurlActiveSide {
+        switch side {
+        case .left:
+            return .left
+        case .right:
+            return .right
+        }
     }
 
     private func elbowFlexion(
