@@ -41,8 +41,18 @@ Additionally, since it's unavoidable that you'll have to use xcode I setup xcode
 
 1. Go to `File -> Project Settings`
 
-2. Here I set `Derived data` to `Project Relative Location`
+2. Set `Derived data` to `Default Location`
 
 3. `Show Shared Schemes` set it to `true`/`ticked`
 
 4. `Compilation caching`  set that to `Disabled`
+
+# SwiftPM cache location
+
+To avoid recreating `CameraKit/.build` inside this repo when running package commands, use a scratch path outside the workspace:
+
+```bash
+cd CameraKit
+swift build --scratch-path ~/Library/Caches/reptile-swiftpm
+swift test --scratch-path ~/Library/Caches/reptile-swiftpm
+```

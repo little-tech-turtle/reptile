@@ -21,6 +21,11 @@ build/
 # SwiftPM
 .build/
 .swiftpm/
+!CameraKit/.swiftpm/
+!CameraKit/.swiftpm/xcode/
+!CameraKit/.swiftpm/xcode/xcshareddata/
+!CameraKit/.swiftpm/xcode/xcshareddata/xcschemes/
+!CameraKit/.swiftpm/xcode/xcshareddata/xcschemes/CameraKit.xcscheme
 
 # Archives / symbols
 *.ipa

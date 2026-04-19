@@ -109,8 +109,7 @@ public struct RepCounterOutput: Sendable {
     public let detectionQuality: DetectionQuality
     public let runningMax: CGFloat
     public let trackedJoints: [VNHumanBodyPose3DObservation.JointName]
-    public let squatFlexionMetrics: SquatFlexionMetrics?
-    public let curlFlexionMetrics: CurlFlexionMetrics?
+    public let exerciseDiagnostics: ExerciseDiagnostics?
 
     public init(
         exerciseProfileID: String,
@@ -121,8 +120,7 @@ public struct RepCounterOutput: Sendable {
         detectionQuality: DetectionQuality,
         runningMax: CGFloat = 0,
         trackedJoints: [VNHumanBodyPose3DObservation.JointName] = [],
-        squatFlexionMetrics: SquatFlexionMetrics? = nil,
-        curlFlexionMetrics: CurlFlexionMetrics? = nil
+        exerciseDiagnostics: ExerciseDiagnostics? = nil
     ) {
         self.exerciseProfileID = exerciseProfileID
         self.poseFrame = poseFrame
@@ -132,8 +130,7 @@ public struct RepCounterOutput: Sendable {
         self.detectionQuality = detectionQuality
         self.runningMax = runningMax
         self.trackedJoints = trackedJoints
-        self.squatFlexionMetrics = squatFlexionMetrics
-        self.curlFlexionMetrics = curlFlexionMetrics
+        self.exerciseDiagnostics = exerciseDiagnostics
     }
 }
 
@@ -254,8 +251,7 @@ public final class RepCounterPublisher: @unchecked Sendable {
     private func process(_ poseFrame: PoseFrame) {
         assertOnProcessingQueue()
 
-        let squatFlexionMetrics = currentSquatFlexionMetrics(from: poseFrame)
-        let curlFlexionMetrics = currentCurlFlexionMetrics(from: poseFrame)
+        let exerciseDiagnostics = currentExerciseDiagnostics(from: poseFrame)
 
         guard let metric = metricCalculator.calculate(from: poseFrame) else {
             sendOutput(
@@ -263,8 +259,7 @@ public final class RepCounterPublisher: @unchecked Sendable {
                 metric: nil,
                 quality: .poor,
                 trackedJoints: metricCalculator.trackedJoints(from: poseFrame),
-                squatFlexionMetrics: squatFlexionMetrics,
-                curlFlexionMetrics: curlFlexionMetrics
+                exerciseDiagnostics: exerciseDiagnostics
             )
             return
         }
@@ -318,8 +313,7 @@ public final class RepCounterPublisher: @unchecked Sendable {
             metric: filteredMetric,
             quality: quality,
             trackedJoints: trackedJoints,
-            squatFlexionMetrics: squatFlexionMetrics,
-            curlFlexionMetrics: curlFlexionMetrics
+            exerciseDiagnostics: exerciseDiagnostics
         )
     }
 
@@ -328,8 +322,7 @@ public final class RepCounterPublisher: @unchecked Sendable {
         metric: CGFloat?,
         quality: DetectionQuality,
         trackedJoints: [VNHumanBodyPose3DObservation.JointName],
-        squatFlexionMetrics: SquatFlexionMetrics?,
-        curlFlexionMetrics: CurlFlexionMetrics?
+        exerciseDiagnostics: ExerciseDiagnostics?
     ) {
         assertOnProcessingQueue()
 
@@ -342,24 +335,13 @@ public final class RepCounterPublisher: @unchecked Sendable {
             detectionQuality: quality,
             runningMax: runningMax,
             trackedJoints: trackedJoints,
-            squatFlexionMetrics: squatFlexionMetrics,
-            curlFlexionMetrics: curlFlexionMetrics
+            exerciseDiagnostics: exerciseDiagnostics
         )
         subject.send(output)
     }
 
-    private func currentSquatFlexionMetrics(from poseFrame: PoseFrame) -> SquatFlexionMetrics? {
-        if let calculator = metricCalculator as? SquatJointFlexion3DMetricCalculator {
-            return calculator.flexionMetrics(from: poseFrame)
-        }
-        return nil
-    }
-
-    private func currentCurlFlexionMetrics(from poseFrame: PoseFrame) -> CurlFlexionMetrics? {
-        if let calculator = metricCalculator as? BicepCurlFlexion3DMetricCalculator {
-            return calculator.flexionMetrics(from: poseFrame)
-        }
-        return nil
+    private func currentExerciseDiagnostics(from poseFrame: PoseFrame) -> ExerciseDiagnostics? {
+        (metricCalculator as? any ExerciseDiagnosticsProvider)?.diagnostics(from: poseFrame)
     }
 
     public func reset() {

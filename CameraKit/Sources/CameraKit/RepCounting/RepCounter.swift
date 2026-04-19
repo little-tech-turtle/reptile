@@ -218,6 +218,7 @@ public struct CurlPhaseRepCounter: RepCounter {
 
     private let movementDeltaThreshold: CGFloat
     private let minCycleDuration: Double
+    private let returnToStartTolerance: CGFloat
 
     private var phase: Phase = .extended
     private var lastObservedMetric: CGFloat?
@@ -237,7 +238,8 @@ public struct CurlPhaseRepCounter: RepCounter {
         inactivityResetSeconds: Double = 3.0,
         activityDeltaThreshold: CGFloat = 0.015,
         movementDeltaThreshold: CGFloat = 0.010,
-        minCycleDuration: Double = 0.35
+        minCycleDuration: Double = 0.35,
+        returnToStartTolerance: CGFloat = 0.08
     ) {
         self.minTimeBetweenReps = minTimeBetweenReps
         self.minAmplitude = minAmplitude
@@ -247,6 +249,7 @@ public struct CurlPhaseRepCounter: RepCounter {
         self.activityDeltaThreshold = activityDeltaThreshold
         self.movementDeltaThreshold = movementDeltaThreshold
         self.minCycleDuration = minCycleDuration
+        self.returnToStartTolerance = max(0, returnToStartTolerance)
     }
 
     public mutating func updateTuning(_ tuning: RepCounterTuning) {
@@ -308,11 +311,14 @@ public struct CurlPhaseRepCounter: RepCounter {
                 return
             }
 
-            guard metricValue <= downThreshold else { return }
-
             let startTime = cycleStartTime ?? timestamp
             let startValue = cycleStartValue ?? metricValue
             let peakValue = cycleMaxValue ?? metricValue
+            let returnedToAbsoluteLockout = metricValue <= downThreshold
+            let returnedNearStart = metricValue <= startValue + returnToStartTolerance
+
+            guard returnedToAbsoluteLockout || returnedNearStart else { return }
+
             let amplitude = peakValue - startValue
             let cycleDuration = CMTimeGetSeconds(timestamp - startTime)
             let timeSinceLastRep = CMTimeGetSeconds(timestamp - lastRepTime)

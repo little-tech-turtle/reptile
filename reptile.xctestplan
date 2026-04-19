@@ -1,0 +1,30 @@
+{
+  "configurations" : [
+    {
+      "id" : "7EF86968-A369-4CFF-892A-59921D4146D3",
+      "name" : "Test Scheme Action",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "performanceAntipatternCheckerEnabled" : true,
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:reptile.xcodeproj",
+      "identifier" : "E23C713A2ED504D500801F8B",
+      "name" : "reptile"
+    }
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : true,
+      "target" : {
+        "containerPath" : "container:reptile.xcodeproj",
+        "identifier" : "E2B617AB2F87F610007F00C7",
+        "name" : "reptileTests"
+      }
+    }
+  ],
+  "version" : 1
+}

@@ -16,6 +16,23 @@ public extension MetricCalculator {
     }
 }
 
+public struct ExerciseDiagnostics: Sendable {
+    public let scalars: [String: Double]
+    public let labels: [String: String]
+
+    public init(
+        scalars: [String: Double] = [:],
+        labels: [String: String] = [:]
+    ) {
+        self.scalars = scalars
+        self.labels = labels
+    }
+}
+
+public protocol ExerciseDiagnosticsProvider {
+    func diagnostics(from frame: PoseFrame) -> ExerciseDiagnostics?
+}
+
 /// Calculates distance from floor (bottom of screen) using best available joint
 public struct DistanceFromFloorCalculator: MetricCalculator {
     public init() {}
@@ -686,7 +703,7 @@ public struct SquatFlexionMetrics: Sendable {
 /// The output metric is `0...1` where `0` means standing lockout and `1` means
 /// bottom depth criteria are met. It uses `min(kneeProgress, hipProgress)` so a
 /// valid bottom requires both joints to flex sufficiently.
-public final class SquatJointFlexion3DMetricCalculator: MetricCalculator {
+public final class SquatJointFlexion3DMetricCalculator: MetricCalculator, ExerciseDiagnosticsProvider {
     private let kneeBottomFlexionDegrees: CGFloat
     private let hipBottomFlexionDegrees: CGFloat
     private let kneeLockoutFlexionDegrees: CGFloat
@@ -766,6 +783,32 @@ public final class SquatJointFlexion3DMetricCalculator: MetricCalculator {
             leftHipFlexionDegrees: leftHip,
             rightHipFlexionDegrees: rightHip
         )
+    }
+
+    public func diagnostics(from frame: PoseFrame) -> ExerciseDiagnostics? {
+        guard let metrics = flexionMetrics(from: frame) else { return nil }
+
+        var scalars: [String: Double] = [:]
+        if let value = metrics.kneeFlexionDegrees {
+            scalars["squat.kneeFlexionDegrees"] = Double(value)
+        }
+        if let value = metrics.hipFlexionDegrees {
+            scalars["squat.hipFlexionDegrees"] = Double(value)
+        }
+        if let value = metrics.leftKneeFlexionDegrees {
+            scalars["squat.leftKneeFlexionDegrees"] = Double(value)
+        }
+        if let value = metrics.rightKneeFlexionDegrees {
+            scalars["squat.rightKneeFlexionDegrees"] = Double(value)
+        }
+        if let value = metrics.leftHipFlexionDegrees {
+            scalars["squat.leftHipFlexionDegrees"] = Double(value)
+        }
+        if let value = metrics.rightHipFlexionDegrees {
+            scalars["squat.rightHipFlexionDegrees"] = Double(value)
+        }
+
+        return ExerciseDiagnostics(scalars: scalars)
     }
 
     private enum Side {
@@ -931,7 +974,10 @@ public struct CurlFlexionMetrics: Sendable {
 /// Output metric is `0...1`, where `0` is arm lockout and `1` is top curl.
 /// If both arms are visible, the side with greater flexion drives the metric
 /// (single-arm tolerant counting).
-public final class BicepCurlFlexion3DMetricCalculator: MetricCalculator {
+public final class BicepCurlFlexion3DMetricCalculator: MetricCalculator, ExerciseDiagnosticsProvider {
+    private static let defaultSideLockActivationRatio: CGFloat = 17.0 / 77.0
+    private static let defaultSideUnlockRatio: CGFloat = 4.0 / 77.0
+
     private let curlTopFlexionDegrees: CGFloat
     private let curlLockoutFlexionDegrees: CGFloat
     private let bilateralBlendToleranceDegrees: CGFloat
@@ -946,14 +992,26 @@ public final class BicepCurlFlexion3DMetricCalculator: MetricCalculator {
         curlTopFlexionDegrees: CGFloat = 95,
         curlLockoutFlexionDegrees: CGFloat = 18,
         bilateralBlendToleranceDegrees: CGFloat = 10,
-        sideLockActivationFlexionDegrees: CGFloat = 35,
-        sideUnlockFlexionDegrees: CGFloat = 22
+        sideLockActivationFlexionDegrees: CGFloat? = nil,
+        sideUnlockFlexionDegrees: CGFloat? = nil
     ) {
-        self.curlTopFlexionDegrees = max(curlTopFlexionDegrees, curlLockoutFlexionDegrees + 5)
-        self.curlLockoutFlexionDegrees = max(0, curlLockoutFlexionDegrees)
+        let clampedLockout = max(0, curlLockoutFlexionDegrees)
+        let clampedTop = max(curlTopFlexionDegrees, clampedLockout + 5)
+        let range = clampedTop - clampedLockout
+
+        self.curlTopFlexionDegrees = clampedTop
+        self.curlLockoutFlexionDegrees = clampedLockout
         self.bilateralBlendToleranceDegrees = max(0, bilateralBlendToleranceDegrees)
-        self.sideLockActivationFlexionDegrees = max(0, sideLockActivationFlexionDegrees)
-        self.sideUnlockFlexionDegrees = max(0, sideUnlockFlexionDegrees)
+
+        let defaultLockActivation = clampedLockout + range * Self.defaultSideLockActivationRatio
+        let defaultUnlock = clampedLockout + range * Self.defaultSideUnlockRatio
+
+        let lockActivation = max(clampedLockout, sideLockActivationFlexionDegrees ?? defaultLockActivation)
+        let unlockUpperBound = max(clampedLockout, lockActivation - 0.5)
+        let unlock = min(max(clampedLockout, sideUnlockFlexionDegrees ?? defaultUnlock), unlockUpperBound)
+
+        self.sideLockActivationFlexionDegrees = lockActivation
+        self.sideUnlockFlexionDegrees = unlock
     }
 
     public func calculate(from frame: PoseFrame) -> CGFloat? {
@@ -1009,6 +1067,28 @@ public final class BicepCurlFlexion3DMetricCalculator: MetricCalculator {
         cachedTimestamp = frame.timestamp
         cachedMetrics = metrics
         return metrics
+    }
+
+    public func diagnostics(from frame: PoseFrame) -> ExerciseDiagnostics? {
+        guard let metrics = flexionMetrics(from: frame) else { return nil }
+
+        var scalars: [String: Double] = [:]
+        if let value = metrics.elbowFlexionDegrees {
+            scalars["curl.elbowFlexionDegrees"] = Double(value)
+        }
+        if let value = metrics.leftElbowFlexionDegrees {
+            scalars["curl.leftElbowFlexionDegrees"] = Double(value)
+        }
+        if let value = metrics.rightElbowFlexionDegrees {
+            scalars["curl.rightElbowFlexionDegrees"] = Double(value)
+        }
+
+        var labels: [String: String] = [:]
+        if let activeSide = metrics.activeSide?.rawValue {
+            labels["curl.activeSide"] = activeSide
+        }
+
+        return ExerciseDiagnostics(scalars: scalars, labels: labels)
     }
 
     private enum Side {
