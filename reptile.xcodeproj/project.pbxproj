@@ -10,14 +10,31 @@
 		E2C0B03D2F19A2E500E9723E /* CameraKit in Frameworks */ = {isa = PBXBuildFile; productRef = E2C0B03C2F19A2E500E9723E /* CameraKit */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		E2B617B02F87F610007F00C7 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E23C71332ED504D500801F8B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E23C713A2ED504D500801F8B;
+			remoteInfo = reptile;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		E23C713B2ED504D500801F8B /* reptile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = reptile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E2B617AC2F87F610007F00C7 /* reptileTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = reptileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E2B617B52F87F6BE007F00C7 /* reptile.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = reptile.xctestplan; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		E23C713D2ED504D500801F8B /* reptile */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = reptile;
+			sourceTree = "<group>";
+		};
+		E2B617AD2F87F610007F00C7 /* reptileTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = reptileTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -31,13 +48,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E2B617A92F87F610007F00C7 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		E23C71322ED504D500801F8B = {
 			isa = PBXGroup;
 			children = (
+				E2B617B52F87F6BE007F00C7 /* reptile.xctestplan */,
 				E23C713D2ED504D500801F8B /* reptile */,
+				E2B617AD2F87F610007F00C7 /* reptileTests */,
 				E23C713C2ED504D500801F8B /* Products */,
 			);
 			sourceTree = "<group>";
@@ -46,6 +72,7 @@
 			isa = PBXGroup;
 			children = (
 				E23C713B2ED504D500801F8B /* reptile.app */,
+				E2B617AC2F87F610007F00C7 /* reptileTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -76,6 +103,29 @@
 			productReference = E23C713B2ED504D500801F8B /* reptile.app */;
 			productType = "com.apple.product-type.application";
 		};
+		E2B617AB2F87F610007F00C7 /* reptileTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E2B617B22F87F610007F00C7 /* Build configuration list for PBXNativeTarget "reptileTests" */;
+			buildPhases = (
+				E2B617A82F87F610007F00C7 /* Sources */,
+				E2B617A92F87F610007F00C7 /* Frameworks */,
+				E2B617AA2F87F610007F00C7 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E2B617B12F87F610007F00C7 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				E2B617AD2F87F610007F00C7 /* reptileTests */,
+			);
+			name = reptileTests;
+			packageProductDependencies = (
+			);
+			productName = reptileTests;
+			productReference = E2B617AC2F87F610007F00C7 /* reptileTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -88,6 +138,10 @@
 				TargetAttributes = {
 					E23C713A2ED504D500801F8B = {
 						CreatedOnToolsVersion = 26.0;
+					};
+					E2B617AB2F87F610007F00C7 = {
+						CreatedOnToolsVersion = 26.0;
+						TestTargetID = E23C713A2ED504D500801F8B;
 					};
 				};
 			};
@@ -109,12 +163,20 @@
 			projectRoot = "";
 			targets = (
 				E23C713A2ED504D500801F8B /* reptile */,
+				E2B617AB2F87F610007F00C7 /* reptileTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		E23C71392ED504D500801F8B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E2B617AA2F87F610007F00C7 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -131,7 +193,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E2B617A82F87F610007F00C7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		E2B617B12F87F610007F00C7 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E23C713A2ED504D500801F8B /* reptile */;
+			targetProxy = E2B617B02F87F610007F00C7 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		E23C71442ED504D600801F8B /* Debug */ = {
@@ -319,6 +396,48 @@
 			};
 			name = Release;
 		};
+		E2B617B32F87F610007F00C7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = QXAB4W6VCF;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.little.tech.turtle.reptileTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/reptile.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/reptile";
+			};
+			name = Debug;
+		};
+		E2B617B42F87F610007F00C7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = QXAB4W6VCF;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.little.tech.turtle.reptileTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/reptile.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/reptile";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -336,6 +455,15 @@
 			buildConfigurations = (
 				E23C71472ED504D600801F8B /* Debug */,
 				E23C71482ED504D600801F8B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E2B617B22F87F610007F00C7 /* Build configuration list for PBXNativeTarget "reptileTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E2B617B32F87F610007F00C7 /* Debug */,
+				E2B617B42F87F610007F00C7 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

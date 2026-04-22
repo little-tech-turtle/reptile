@@ -1,5 +1,6 @@
 import Testing
 import CoreMedia
+import Foundation
 @testable import CameraKit
 import Vision
 
@@ -27,14 +28,74 @@ private func feedDetector(_ detector: inout LocalExtremaPeakDetector, values: [C
 private func makeFrame(
     _ joints: [VNHumanBodyPose3DObservation.JointName: CameraKit.NormalizedPoint] = [:],
     positions3D: [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>] = [:],
-    seconds: Double = 0
+    seconds: Double = 0,
+    diagnostics: PoseFrameDiagnostics = .empty
 ) -> PoseFrame {
     PoseFrame(
         timestamp: CMTime(seconds: seconds, preferredTimescale: 600),
         joints: joints,
-        positions3D: positions3D
+        positions3D: positions3D,
+        diagnostics: diagnostics
     )
 }
+
+#if canImport(AVFoundation)
+private func makeSampleBuffer(seconds: Double) throws -> CMSampleBuffer {
+    var pixelBuffer: CVPixelBuffer?
+    let attrs: [CFString: Any] = [
+        kCVPixelBufferCGImageCompatibilityKey: true,
+        kCVPixelBufferCGBitmapContextCompatibilityKey: true,
+    ]
+
+    CVPixelBufferCreate(
+        kCFAllocatorDefault,
+        4,
+        4,
+        kCVPixelFormatType_32BGRA,
+        attrs as CFDictionary,
+        &pixelBuffer
+    )
+
+    guard let pixelBuffer else {
+        struct SampleBufferError: Error {}
+        throw SampleBufferError()
+    }
+
+    var formatDescription: CMVideoFormatDescription?
+    CMVideoFormatDescriptionCreateForImageBuffer(
+        allocator: kCFAllocatorDefault,
+        imageBuffer: pixelBuffer,
+        formatDescriptionOut: &formatDescription
+    )
+
+    guard let formatDescription else {
+        struct SampleBufferError: Error {}
+        throw SampleBufferError()
+    }
+
+    var timing = CMSampleTimingInfo(
+        duration: .invalid,
+        presentationTimeStamp: CMTime(seconds: seconds, preferredTimescale: 600),
+        decodeTimeStamp: .invalid
+    )
+
+    var sampleBuffer: CMSampleBuffer?
+    CMSampleBufferCreateReadyWithImageBuffer(
+        allocator: kCFAllocatorDefault,
+        imageBuffer: pixelBuffer,
+        formatDescription: formatDescription,
+        sampleTiming: &timing,
+        sampleBufferOut: &sampleBuffer
+    )
+
+    guard let sampleBuffer else {
+        struct SampleBufferError: Error {}
+        throw SampleBufferError()
+    }
+
+    return sampleBuffer
+}
+#endif
 
 /// Builds synthetic 3D joint positions for a squat at the given normalised depth.
 ///
@@ -524,6 +585,203 @@ private func time(_ seconds: Double) -> CMTime {
     }
     #expect(abs(result - 1.0) < 0.001)
 }
+
+// MARK: - PoseFrameStabilizer
+
+private func meanAbsoluteDelta(_ values: [CGFloat]) -> CGFloat {
+    guard values.count >= 2 else { return 0 }
+    var total: CGFloat = 0
+    for i in 1 ..< values.count {
+        total += abs(values[i] - values[i - 1])
+    }
+    return total / CGFloat(values.count - 1)
+}
+
+@Test func poseFrameStabilizer_reducesJitterForStationaryJoint() {
+    var stabilizer = PoseFrameStabilizer(
+        configuration: PoseStabilizationConfiguration(
+            emaAlpha2D: 0.35,
+            emaAlpha3D: 0.35,
+            maxHoldFrames2D: 2,
+            maxHoldFrames3D: 2,
+            max2DJump: 0.2,
+            max3DJump: 0.6
+        )
+    )
+
+    let rawX: [CGFloat] = [0.50, 0.58, 0.43, 0.57, 0.45, 0.56, 0.44]
+    var smoothedX: [CGFloat] = []
+
+    for value in rawX {
+        let output = stabilizer.stabilize(
+            joints: [.leftElbow: NormalizedPoint(x: value, y: 0.6)],
+            positions3D: [.leftElbow: SIMD3<Float>(Float(value), 0.1, 2.0)],
+            observationConfidence: 0.9
+        )
+        smoothedX.append(output.joints[.leftElbow]?.x ?? value)
+    }
+
+    #expect(meanAbsoluteDelta(smoothedX) < meanAbsoluteDelta(rawX))
+}
+
+@Test func poseFrameStabilizer_holdsJointBrieflyThenExpires() {
+    var stabilizer = PoseFrameStabilizer(
+        configuration: PoseStabilizationConfiguration(
+            emaAlpha2D: 1.0,
+            emaAlpha3D: 1.0,
+            maxHoldFrames2D: 2,
+            maxHoldFrames3D: 2,
+            max2DJump: 0.2,
+            max3DJump: 0.6
+        )
+    )
+
+    let frame0 = stabilizer.stabilize(
+        joints: [.leftElbow: NormalizedPoint(x: 0.42, y: 0.5)],
+        positions3D: [.leftElbow: SIMD3<Float>(0.42, 0.1, 2.0)],
+        observationConfidence: 0.8
+    )
+    let frame1 = stabilizer.stabilize(joints: [:], positions3D: [:], observationConfidence: 0.8)
+    let frame2 = stabilizer.stabilize(joints: [:], positions3D: [:], observationConfidence: 0.8)
+    let frame3 = stabilizer.stabilize(joints: [:], positions3D: [:], observationConfidence: 0.8)
+
+    #expect(frame0.joints[.leftElbow] != nil)
+    #expect(frame1.joints[.leftElbow] != nil)
+    #expect(frame2.joints[.leftElbow] != nil)
+    #expect(frame3.joints[.leftElbow] == nil)
+    #expect(frame1.diagnostics.held3DJointCount == 1)
+    #expect(frame2.diagnostics.held3DJointCount == 1)
+}
+
+@Test func poseFrameStabilizer_clampsLarge3DOutlierJump() {
+    var stabilizer = PoseFrameStabilizer(
+        configuration: PoseStabilizationConfiguration(
+            emaAlpha2D: 1.0,
+            emaAlpha3D: 1.0,
+            maxHoldFrames2D: 1,
+            maxHoldFrames3D: 1,
+            max2DJump: 1.0,
+            max3DJump: 0.1
+        )
+    )
+
+    _ = stabilizer.stabilize(
+        joints: [.leftElbow: NormalizedPoint(x: 0.5, y: 0.5)],
+        positions3D: [.leftElbow: SIMD3<Float>(0.0, 0.0, 2.0)],
+        observationConfidence: 0.9
+    )
+
+    let outlier = stabilizer.stabilize(
+        joints: [.leftElbow: NormalizedPoint(x: 0.5, y: 0.5)],
+        positions3D: [.leftElbow: SIMD3<Float>(2.0, 0.0, 2.0)],
+        observationConfidence: 0.9
+    )
+
+    let x = outlier.positions3D[.leftElbow]?.x
+    #expect(x != nil)
+    #expect(abs((x ?? 0) - 0.1) < 0.0001)
+    #expect(outlier.diagnostics.clamped3DJointCount == 1)
+}
+
+@Test func poseFrameStabilizer_default3DDoesNotLagLargeStepChanges() {
+    var stabilizer = PoseFrameStabilizer()
+
+    _ = stabilizer.stabilize(
+        joints: [.leftElbow: NormalizedPoint(x: 0.2, y: 0.5)],
+        positions3D: [.leftElbow: SIMD3<Float>(0.0, 0.0, 2.0)],
+        observationConfidence: 0.9
+    )
+
+    let stepped = stabilizer.stabilize(
+        joints: [.leftElbow: NormalizedPoint(x: 0.8, y: 0.5)],
+        positions3D: [.leftElbow: SIMD3<Float>(1.0, 0.0, 2.0)],
+        observationConfidence: 0.9
+    )
+
+    let x = stepped.positions3D[.leftElbow]?.x
+    #expect(x != nil)
+    #expect(abs((x ?? 0) - 1.0) < 0.0001)
+}
+
+@Test func poseFrameStabilizer_default3DDoesNotHoldMissingJoints() {
+    var stabilizer = PoseFrameStabilizer()
+
+    _ = stabilizer.stabilize(
+        joints: [.leftElbow: NormalizedPoint(x: 0.5, y: 0.5)],
+        positions3D: [.leftElbow: SIMD3<Float>(0.2, 0.0, 2.0)],
+        observationConfidence: 0.9
+    )
+
+    let missing = stabilizer.stabilize(
+        joints: [.leftElbow: NormalizedPoint(x: 0.5, y: 0.5)],
+        positions3D: [:],
+        observationConfidence: 0.9
+    )
+
+    #expect(missing.positions3D[.leftElbow] == nil)
+    #expect(missing.diagnostics.held3DJointCount == 0)
+}
+
+@Test func poseFrameStabilizer_default2DRemainsResponsiveForStepMotion() {
+    var stabilizer = PoseFrameStabilizer()
+
+    _ = stabilizer.stabilize(
+        joints: [.leftElbow: NormalizedPoint(x: 0.2, y: 0.5)],
+        positions3D: [.leftElbow: SIMD3<Float>(0.0, 0.0, 2.0)],
+        observationConfidence: 0.9
+    )
+
+    let stepped = stabilizer.stabilize(
+        joints: [.leftElbow: NormalizedPoint(x: 0.8, y: 0.5)],
+        positions3D: [.leftElbow: SIMD3<Float>(1.0, 0.0, 2.0)],
+        observationConfidence: 0.9
+    )
+
+    let x = stepped.joints[.leftElbow]?.x
+    #expect(x != nil)
+    #expect((x ?? 0) >= 0.70)
+}
+
+#if canImport(AVFoundation)
+@Test func poseDetectorPublisher_usesSampleBufferVisionExecutor() async throws {
+    final class FakeVisionExecutor: PoseVisionExecuting, @unchecked Sendable {
+        private let lock = NSLock()
+        private var callCount = 0
+        private var lastOrientation: CGImagePropertyOrientation?
+        private var lastTimestamp: CMTime?
+
+        func detectPoses(
+            in sampleBuffer: CMSampleBuffer,
+            orientation: CGImagePropertyOrientation
+        ) throws -> [VNHumanBodyPose3DObservation] {
+            lock.lock()
+            callCount += 1
+            lastOrientation = orientation
+            lastTimestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            lock.unlock()
+            return []
+        }
+
+        func snapshot() -> (Int, CGImagePropertyOrientation?, CMTime?) {
+            lock.lock()
+            defer { lock.unlock() }
+            return (callCount, lastOrientation, lastTimestamp)
+        }
+    }
+
+    let executor = FakeVisionExecutor()
+    let detector = PoseDetectorPublisher(visionExecutor: executor)
+    let sampleBuffer = try makeSampleBuffer(seconds: 1.25)
+
+    detector.ingest(CameraFrame(sampleBuffer: sampleBuffer, visionOrientation: .leftMirrored))
+    try await Task.sleep(nanoseconds: 200_000_000)
+
+    let (count, orientation, timestamp) = executor.snapshot()
+    #expect(count == 1)
+    #expect(orientation == .leftMirrored)
+    #expect(abs(CMTimeGetSeconds((timestamp ?? .zero)) - 1.25) < 0.0001)
+}
+#endif
 
 // MARK: - FrameTransformPolicy
 
@@ -1216,6 +1474,14 @@ private func feedSquatCounter(
     #expect(box.lastRepCount == 2)
 }
 
+@Test func squatExerciseProfile_usesOnlySpikeFilterByDefault() {
+    let profile = SquatExerciseProfile()
+    let filters = profile.makeMetricFilters(configuration: RepCountingConfiguration())
+
+    #expect(filters.count == 1)
+    #expect(filters.first is SpikeRejectionFilter)
+}
+
 // MARK: - Bicep Curl
 
 @Test func bicepCurlFlexion3D_straightArmLowContractedHigh() {
@@ -1256,6 +1522,15 @@ private func feedSquatCounter(
 
     let counter = profile.makeRepCounter(configuration: configuration)
     #expect(counter is CurlPhaseRepCounter)
+}
+
+@Test func bicepCurlExerciseProfile_keepsSpikeAndEMAFilters() {
+    let profile = BicepCurlExerciseProfile()
+    let filters = profile.makeMetricFilters(configuration: RepCountingConfiguration())
+
+    #expect(filters.count == 2)
+    #expect(filters.first is SpikeRejectionFilter)
+    #expect(filters.last is EMAMetricFilter)
 }
 
 @Test func bicepCurlFlexion3D_locksActiveSideMidRepUntilExtension() {
@@ -1540,6 +1815,68 @@ private func feedSquatCounter(
     _ = cancellable
 
     #expect(box.lastRepCount == 0)
+}
+
+@Test func repCounterPublisher_switchingProfilesRetainsSquatAndCurlCounting() async throws {
+    let config = RepCountingConfiguration(spikeMaxDelta: 1.0, emaAlpha: 1.0)
+    let publisher = RepCounterPublisher(configuration: config, exerciseProfile: SquatExerciseProfile())
+
+    final class OutputBox: @unchecked Sendable {
+        var lastRepCount = 0
+    }
+    let box = OutputBox()
+    let cancellable = publisher.repCounts.sink { box.lastRepCount = $0.repCount }
+
+    let squatDepths: [CGFloat] = [0.00, 0.08, 0.22, 0.45, 0.68, 0.88, 0.96, 0.80, 0.56, 0.32, 0.12, 0.03]
+    for (i, depth) in squatDepths.enumerated() {
+        let t = CMTime(seconds: Double(i) * 0.1, preferredTimescale: 600)
+        publisher.ingest(PoseFrame(
+            timestamp: t,
+            joints: [:],
+            positions3D: squat3DJointFlexionPositions(
+                kneeFlexionDegrees: 10 + 95 * depth,
+                hipFlexionDegrees: 10 + 75 * depth
+            )
+        ))
+    }
+
+    try await Task.sleep(nanoseconds: 400_000_000)
+    #expect(box.lastRepCount == 1)
+
+    publisher.setExerciseProfile(BicepCurlExerciseProfile(), configuration: config)
+    let curlCycle: [CGFloat] = [10, 20, 35, 55, 80, 102, 78, 52, 30, 16, 8]
+    for (i, flexion) in curlCycle.enumerated() {
+        let t = CMTime(seconds: 2.0 + Double(i) * 0.1, preferredTimescale: 600)
+        publisher.ingest(PoseFrame(
+            timestamp: t,
+            joints: [:],
+            positions3D: bicepCurl3DJointPositions(
+                leftElbowFlexionDegrees: flexion,
+                rightElbowFlexionDegrees: max(8, flexion - 10)
+            )
+        ))
+    }
+
+    try await Task.sleep(nanoseconds: 400_000_000)
+    #expect(box.lastRepCount == 1)
+
+    publisher.setExerciseProfile(SquatExerciseProfile(), configuration: config)
+    for (i, depth) in squatDepths.enumerated() {
+        let t = CMTime(seconds: 4.0 + Double(i) * 0.1, preferredTimescale: 600)
+        publisher.ingest(PoseFrame(
+            timestamp: t,
+            joints: [:],
+            positions3D: squat3DJointFlexionPositions(
+                kneeFlexionDegrees: 10 + 95 * depth,
+                hipFlexionDegrees: 10 + 75 * depth
+            )
+        ))
+    }
+
+    try await Task.sleep(nanoseconds: 400_000_000)
+    _ = cancellable
+
+    #expect(box.lastRepCount == 1)
 }
 
 @Test func repCounterPublisher_countsAlternatingArmsWithConfiguredLockoutRange() async throws {

@@ -1,9 +1,6 @@
 import CameraKit
 import UIKit
 
-/// UIScrollView subclass that prevents the scroll gesture from cancelling
-/// touch tracking inside UISlider subviews. Without this override the pan
-/// recogniser can steal the touch mid-drag, making sliders unresponsive.
 private final class SliderFriendlyScrollView: UIScrollView {
     override func touchesShouldCancel(in view: UIView) -> Bool {
         view is UISlider ? false : super.touchesShouldCancel(in: view)
@@ -14,13 +11,18 @@ final class RepTuningPanelView: UIView {
     var onConfigurationChanged: ((RepCountingConfiguration) -> Void)?
     var onInteractionChanged: ((Bool) -> Void)?
 
+    private struct RowBinding {
+        let control: TuningControlDefinition
+        let row: TuningSliderRow
+    }
+
     private var configuration = RepCountingConfiguration()
-    private var exerciseMode: ExerciseMode = .squat
+    private var exerciseDefinition: ExerciseDefinition = ExerciseCatalog.defaultExercise
+    private var rowBindings: [RowBinding] = []
     private var activeSliderInteractions = 0
 
     private let titleLabel: UILabel = {
         let label = UILabel()
-        label.text = "Rep Tuning"
         label.textColor = .white
         label.font = .systemFont(ofSize: 15, weight: .semibold)
         return label
@@ -53,15 +55,6 @@ final class RepTuningPanelView: UIView {
         return scrollView
     }()
 
-    private let kneeBottomRow = TuningSliderRow(title: "Knee bottom flexion", min: 45, max: 130, format: "%.0f°")
-    private let hipBottomRow = TuningSliderRow(title: "Hip bottom flexion", min: 30, max: 120, format: "%.0f°")
-    private let kneeLockoutRow = TuningSliderRow(title: "Knee lockout max", min: 0, max: 45, format: "%.0f°")
-    private let hipLockoutRow = TuningSliderRow(title: "Hip lockout max", min: 0, max: 50, format: "%.0f°")
-    private let curlTopRow = TuningSliderRow(title: "Curl top flexion", min: 45, max: 140, format: "%.0f°")
-    private let curlLockoutRow = TuningSliderRow(title: "Curl lockout max", min: 0, max: 50, format: "%.0f°")
-    private let minAmplitudeRow = TuningSliderRow(title: "Min range of motion", min: 0.05, max: 0.55, format: "%.0f%%", displayScale: 100)
-    private let minTimeRow = TuningSliderRow(title: "Min time between reps", min: 0.20, max: 1.80, format: "%.1fs")
-
     override init(frame: CGRect) {
         super.init(frame: frame)
         setupUI()
@@ -74,20 +67,19 @@ final class RepTuningPanelView: UIView {
         wireEvents()
     }
 
-    func apply(configuration: RepCountingConfiguration) {
-        apply(configuration: configuration, exerciseMode: exerciseMode)
-    }
-
-    func apply(configuration: RepCountingConfiguration, exerciseMode: ExerciseMode) {
+    func apply(
+        configuration: RepCountingConfiguration,
+        exerciseDefinition: ExerciseDefinition
+    ) {
         self.configuration = configuration
-        self.exerciseMode = exerciseMode
-        titleLabel.text = "Rep Tuning (\(exerciseMode.title))"
-        applyExerciseVisibility()
+        self.exerciseDefinition = exerciseDefinition
+        titleLabel.text = "Rep Tuning (\(exerciseDefinition.title))"
+        rebuildRowsIfNeeded(for: exerciseDefinition)
         syncRows()
     }
 
     @objc private func resetTapped() {
-        applyAndPublish(LiveCameraCoordinator.defaultRepTuning(for: exerciseMode))
+        applyAndPublish(exerciseDefinition.defaultTuning)
     }
 
     private func setupUI() {
@@ -100,14 +92,6 @@ final class RepTuningPanelView: UIView {
         header.alignment = .center
         header.translatesAutoresizingMaskIntoConstraints = false
 
-        stackView.addArrangedSubview(kneeBottomRow)
-        stackView.addArrangedSubview(hipBottomRow)
-        stackView.addArrangedSubview(kneeLockoutRow)
-        stackView.addArrangedSubview(hipLockoutRow)
-        stackView.addArrangedSubview(curlTopRow)
-        stackView.addArrangedSubview(curlLockoutRow)
-        stackView.addArrangedSubview(minAmplitudeRow)
-        stackView.addArrangedSubview(minTimeRow)
         stackView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -135,37 +119,41 @@ final class RepTuningPanelView: UIView {
 
     private func wireEvents() {
         resetButton.addTarget(self, action: #selector(resetTapped), for: .touchUpInside)
+    }
 
-        kneeBottomRow.onValueChanged = { [weak self] value in
-            self?.update { $0.squatKneeBottomFlexionDegrees = CGFloat(value) }
-        }
-        hipBottomRow.onValueChanged = { [weak self] value in
-            self?.update { $0.squatHipBottomFlexionDegrees = CGFloat(value) }
-        }
-        kneeLockoutRow.onValueChanged = { [weak self] value in
-            self?.update { $0.squatKneeLockoutFlexionDegrees = CGFloat(value) }
-        }
-        hipLockoutRow.onValueChanged = { [weak self] value in
-            self?.update { $0.squatHipLockoutFlexionDegrees = CGFloat(value) }
-        }
-        curlTopRow.onValueChanged = { [weak self] value in
-            self?.update { $0.curlTopFlexionDegrees = CGFloat(value) }
-        }
-        curlLockoutRow.onValueChanged = { [weak self] value in
-            self?.update { $0.curlLockoutFlexionDegrees = CGFloat(value) }
-        }
-        minAmplitudeRow.onValueChanged = { [weak self] value in
-            self?.update { $0.minAmplitude = CGFloat(value) }
-        }
-        minTimeRow.onValueChanged = { [weak self] value in
-            self?.update { $0.minTimeBetweenReps = Double(value) }
-        }
+    private func rebuildRowsIfNeeded(for definition: ExerciseDefinition) {
+        let currentIDs = rowBindings.map { $0.control.id }
+        let targetIDs = definition.tuningControls.map { $0.id }
+        guard currentIDs != targetIDs else { return }
 
-        let rows = [kneeBottomRow, hipBottomRow, kneeLockoutRow, hipLockoutRow, curlTopRow, curlLockoutRow, minAmplitudeRow, minTimeRow]
-        for row in rows {
+        for binding in rowBindings {
+            binding.row.removeFromSuperview()
+        }
+        rowBindings.removeAll()
+
+        for control in definition.tuningControls {
+            let row = TuningSliderRow(
+                title: control.title,
+                hint: control.hint,
+                min: control.min,
+                max: control.max,
+                format: control.format,
+                displayScale: control.displayScale
+            )
+
+            row.onValueChanged = { [weak self] value in
+                guard let self else { return }
+                self.update { config in
+                    control.writeValue(&config, value)
+                }
+            }
+
             row.onInteractionChanged = { [weak self] isInteracting in
                 self?.handleRowInteractionChanged(isInteracting)
             }
+
+            stackView.addArrangedSubview(row)
+            rowBindings.append(RowBinding(control: control, row: row))
         }
     }
 
@@ -190,29 +178,14 @@ final class RepTuningPanelView: UIView {
     }
 
     private func applyAndPublish(_ configuration: RepCountingConfiguration) {
-        apply(configuration: configuration)
+        apply(configuration: configuration, exerciseDefinition: exerciseDefinition)
         onConfigurationChanged?(configuration)
     }
 
     private func syncRows() {
-        kneeBottomRow.setValue(Float(configuration.squatKneeBottomFlexionDegrees))
-        hipBottomRow.setValue(Float(configuration.squatHipBottomFlexionDegrees))
-        kneeLockoutRow.setValue(Float(configuration.squatKneeLockoutFlexionDegrees))
-        hipLockoutRow.setValue(Float(configuration.squatHipLockoutFlexionDegrees))
-        curlTopRow.setValue(Float(configuration.curlTopFlexionDegrees))
-        curlLockoutRow.setValue(Float(configuration.curlLockoutFlexionDegrees))
-        minAmplitudeRow.setValue(Float(configuration.minAmplitude))
-        minTimeRow.setValue(Float(configuration.minTimeBetweenReps))
-    }
-
-    private func applyExerciseVisibility() {
-        let isSquat = exerciseMode == .squat
-        kneeBottomRow.isHidden = !isSquat
-        hipBottomRow.isHidden = !isSquat
-        kneeLockoutRow.isHidden = !isSquat
-        hipLockoutRow.isHidden = !isSquat
-        curlTopRow.isHidden = isSquat
-        curlLockoutRow.isHidden = isSquat
+        for binding in rowBindings {
+            binding.row.setValue(binding.control.readValue(configuration))
+        }
     }
 }
 
@@ -221,13 +194,14 @@ private final class TuningSliderRow: UIView {
     var onInteractionChanged: ((Bool) -> Void)?
 
     private let titleLabel = UILabel()
+    private let hintLabel = UILabel()
     private let valueLabel = UILabel()
     private let slider = UISlider()
     private let format: String
     private let displayScale: Float
     private var isInteracting = false
 
-    init(title: String, min: Float, max: Float, format: String, displayScale: Float = 1) {
+    init(title: String, hint: String, min: Float, max: Float, format: String, displayScale: Float = 1) {
         self.format = format
         self.displayScale = displayScale
         super.init(frame: .zero)
@@ -241,6 +215,11 @@ private final class TuningSliderRow: UIView {
         valueLabel.textAlignment = .right
         valueLabel.setContentHuggingPriority(.required, for: .horizontal)
 
+        hintLabel.text = hint
+        hintLabel.textColor = UIColor.white.withAlphaComponent(0.78)
+        hintLabel.font = .systemFont(ofSize: 11, weight: .regular)
+        hintLabel.numberOfLines = 0
+
         slider.minimumValue = min
         slider.maximumValue = max
         slider.minimumTrackTintColor = .systemGreen
@@ -253,9 +232,9 @@ private final class TuningSliderRow: UIView {
         top.axis = .horizontal
         top.alignment = .center
 
-        let stack = UIStackView(arrangedSubviews: [top, slider])
+        let stack = UIStackView(arrangedSubviews: [top, hintLabel, slider])
         stack.axis = .vertical
-        stack.spacing = 4
+        stack.spacing = 3
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(stack)
@@ -268,33 +247,33 @@ private final class TuningSliderRow: UIView {
     }
 
     required init?(coder: NSCoder) {
-        return nil
+        fatalError("init(coder:) has not been implemented")
     }
 
     func setValue(_ value: Float) {
         slider.setValue(value, animated: false)
-        valueLabel.text = String(format: format, value * displayScale)
+        updateValueLabel(value)
     }
 
     @objc private func sliderChanged() {
-        if slider.isTracking {
-            setInteracting(true)
-        }
-        valueLabel.text = String(format: format, slider.value * displayScale)
-        onValueChanged?(slider.value)
+        let value = slider.value
+        updateValueLabel(value)
+        onValueChanged?(value)
     }
 
     @objc private func sliderTouchDown() {
-        setInteracting(true)
+        guard !isInteracting else { return }
+        isInteracting = true
+        onInteractionChanged?(true)
     }
 
     @objc private func sliderTouchUp() {
-        setInteracting(false)
+        guard isInteracting else { return }
+        isInteracting = false
+        onInteractionChanged?(false)
     }
 
-    private func setInteracting(_ interacting: Bool) {
-        guard isInteracting != interacting else { return }
-        isInteracting = interacting
-        onInteractionChanged?(interacting)
+    private func updateValueLabel(_ value: Float) {
+        valueLabel.text = String(format: format, value * displayScale)
     }
 }

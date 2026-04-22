@@ -5,92 +5,26 @@ import Foundation
 import UIKit
 import Vision
 
-enum ExerciseMode: String, CaseIterable {
-    case squat
-    case bicepCurl
-
-    var title: String {
-        switch self {
-        case .squat:
-            return "Squat"
-        case .bicepCurl:
-            return "Curl"
-        }
-    }
-
-    var profile: any ExerciseProfile {
-        switch self {
-        case .squat:
-            return SquatExerciseProfile()
-        case .bicepCurl:
-            return BicepCurlExerciseProfile()
-        }
-    }
-}
-
 @MainActor
 final class LiveCameraCoordinator {
-    nonisolated static let defaultSquatRepTuning = RepCountingConfiguration(
-        armingThreshold: 0.5,
-        minPeakHeight: 0.08,
-        minValleyDepth: 0.08,
-        peakWindowSize: 5,
-        minTimeBetweenReps: 0.6,
-        minAmplitude: 0.55,
-        upThreshold: 0.20,
-        downThreshold: 0.92,
-        squatDescendEntryThreshold: 0.18,
-        squatStandLockoutThreshold: 0.10,
-        squatKneeBottomFlexionDegrees: 80,
-        squatHipBottomFlexionDegrees: 60,
-        squatKneeLockoutFlexionDegrees: 18,
-        squatHipLockoutFlexionDegrees: 20,
-        squatMaxSideAsymmetryDegrees: 25,
-        inactivityResetSeconds: 3.0,
-        activityDeltaThreshold: 0.015,
-        spikeMaxDelta: 0.25,
-        emaAlpha: 0.3
-    )
+    static let availableExercises: [ExerciseDefinition] = ExerciseCatalog.all
 
-    nonisolated static let defaultBicepCurlRepTuning = RepCountingConfiguration(
-        armingThreshold: 0.5,
-        minPeakHeight: 0.08,
-        minValleyDepth: 0.08,
-        peakWindowSize: 5,
-        minTimeBetweenReps: 0.5,
-        minAmplitude: 0.25,
-        upThreshold: 0.65,
-        downThreshold: 0.25,
-        squatDescendEntryThreshold: 0.18,
-        squatStandLockoutThreshold: 0.10,
-        squatKneeBottomFlexionDegrees: 80,
-        squatHipBottomFlexionDegrees: 60,
-        squatKneeLockoutFlexionDegrees: 18,
-        squatHipLockoutFlexionDegrees: 20,
-        squatMaxSideAsymmetryDegrees: 25,
-        curlTopFlexionDegrees: 95,
-        curlLockoutFlexionDegrees: 18,
-        inactivityResetSeconds: 3.0,
-        activityDeltaThreshold: 0.015,
-        spikeMaxDelta: 0.25,
-        emaAlpha: 0.3
-    )
+    static var defaultExercise: ExerciseDefinition {
+        ExerciseCatalog.defaultExercise
+    }
 
-    nonisolated static let defaultRepTuning = defaultSquatRepTuning
+    static func definition(for id: String) -> ExerciseDefinition? {
+        ExerciseCatalog.definition(for: id)
+    }
 
-    nonisolated static func defaultRepTuning(for exercise: ExerciseMode) -> RepCountingConfiguration {
-        switch exercise {
-        case .squat:
-            return defaultSquatRepTuning
-        case .bicepCurl:
-            return defaultBicepCurlRepTuning
-        }
+    static func defaultRepTuning(for exerciseID: String) -> RepCountingConfiguration {
+        ExerciseCatalog.definition(for: exerciseID)?.defaultTuning ?? ExerciseCatalog.defaultExercise.defaultTuning
     }
 
     private let pipeline: LivePipeline
     private let projector: ScreenSpaceProjector
     private var repTuning: RepCountingConfiguration
-    private var selectedExercise: ExerciseMode
+    private var selectedExerciseID: String
     private var cameraPosition: AVCaptureDevice.Position = .front
     private var latestInterfaceOrientation: UIInterfaceOrientation = .portrait
 
@@ -103,14 +37,16 @@ final class LiveCameraCoordinator {
 
     init(
         pipeline: LivePipeline? = nil,
-        exerciseMode: ExerciseMode = .squat,
+        exerciseID: String? = nil,
         repTuning: RepCountingConfiguration? = nil,
         projector: ScreenSpaceProjector = ScreenSpaceProjector()
     ) {
-        self.selectedExercise = exerciseMode
-        self.repTuning = repTuning ?? LiveCameraCoordinator.defaultRepTuning(for: exerciseMode)
+        let requestedExerciseID = exerciseID ?? ExerciseCatalog.defaultExercise.id
+        let selectedDefinition = ExerciseCatalog.definition(for: requestedExerciseID) ?? ExerciseCatalog.defaultExercise
+        self.selectedExerciseID = selectedDefinition.id
+        self.repTuning = repTuning ?? selectedDefinition.defaultTuning
         self.pipeline = pipeline ?? LivePipeline(
-            repCounter: RepCounterPublisher(configuration: self.repTuning, exerciseProfile: exerciseMode.profile)
+            repCounter: RepCounterPublisher(configuration: self.repTuning, exerciseProfile: selectedDefinition.makeProfile())
         )
         self.projector = projector
         applyCameraPolicy(for: cameraPosition)
@@ -171,14 +107,16 @@ final class LiveCameraCoordinator {
         repTuning
     }
 
-    func currentExercise() -> ExerciseMode {
-        selectedExercise
+    func currentExerciseID() -> String {
+        selectedExerciseID
     }
 
-    func setExercise(_ exercise: ExerciseMode, configuration: RepCountingConfiguration) {
-        selectedExercise = exercise
+    func setExercise(id: String, configuration: RepCountingConfiguration) {
+        guard let definition = ExerciseCatalog.definition(for: id) else { return }
+
+        selectedExerciseID = definition.id
         repTuning = configuration
-        pipeline.setExerciseProfile(exercise.profile, configuration: configuration)
+        pipeline.setExerciseProfile(definition.makeProfile(), configuration: configuration)
     }
 
     func updateRepCountingConfiguration(_ configuration: RepCountingConfiguration) {
@@ -239,7 +177,7 @@ final class LiveCameraCoordinator {
                 statusText: status,
                 joints: joints,
                 trackedJoints: trackedJoints,
-                exerciseMode: selectedExercise,
+                exerciseID: selectedExerciseID,
                 output: latestOutput
             )
         )

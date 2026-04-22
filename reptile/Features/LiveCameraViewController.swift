@@ -11,25 +11,24 @@ import UIKit
 import QuartzCore
 
 final class LiveCameraViewController: UIViewController {
-    private static let tuningStoragePrefix = "repTuning.v5"
+    static let tuningStoragePrefix = "repTuning.v6"
     private static let cameraPositionStorageKey = "cameraPosition.v1"
-    private static let exerciseModeStorageKey = "exerciseMode.v1"
+    private static let exerciseIDStorageKey = "exerciseID.v1"
 
     private let previewView = CameraPreviewView()
     private let repCountLabel = UILabel()
     private let statusLabel = UILabel()
-    private let exerciseSelector = UISegmentedControl(items: ExerciseMode.allCases.map(\.title))
+    private let exerciseSelector = UISegmentedControl(items: LiveCameraCoordinator.availableExercises.map(\.title))
     private let cameraToggleButton = UIButton(type: .system)
     private let overlayView = SkeletonOverlayView()
     private let debugView = DebugOverlayView()
     private let tuningPanel = RepTuningPanelView()
     private let repFeedbackPlayer = RepFeedbackPlayer()
+    private let tuningUpdateCoordinator = RepTuningUpdateCoordinator()
 
     private let coordinator = LiveCameraCoordinator()
-    private var selectedExercise: ExerciseMode = .squat
+    private var selectedExerciseID = LiveCameraCoordinator.defaultExercise.id
 
-    private var pendingConfigurationUpdate: DispatchWorkItem?
-    private let configurationDebounceInterval: TimeInterval = 0.12
     private let debugUpdateInterval: CFTimeInterval = 1.0 / 12.0
     private var lastDebugUpdateTime: CFTimeInterval = 0
     private var isAdjustingTuningControls = false
@@ -41,10 +40,6 @@ final class LiveCameraViewController: UIViewController {
         gesture.delegate = self
         return gesture
     }()
-
-    deinit {
-        pendingConfigurationUpdate?.cancel()
-    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -60,20 +55,22 @@ final class LiveCameraViewController: UIViewController {
         setupTuningPanel()
         view.addGestureRecognizer(debugToggleGesture)
 
-        let initialExercise = loadSavedExerciseMode()
-        selectedExercise = initialExercise
-        let initialTuning = loadSavedRepTuning(for: initialExercise)
+        let initialExerciseID = loadSavedExerciseID()
+        let initialExerciseDefinition = LiveCameraCoordinator.definition(for: initialExerciseID)
+            ?? LiveCameraCoordinator.defaultExercise
+        selectedExerciseID = initialExerciseDefinition.id
+        let initialTuning = loadSavedRepTuning(for: initialExerciseDefinition.id)
         let initialCameraPosition = loadSavedCameraPosition()
 
-        coordinator.setExercise(initialExercise, configuration: initialTuning)
+        coordinator.setExercise(id: initialExerciseDefinition.id, configuration: initialTuning)
         coordinator.setCameraPosition(initialCameraPosition)
-        debugView.updateConfiguration(initialTuning, exerciseMode: initialExercise)
-        tuningPanel.apply(configuration: initialTuning, exerciseMode: initialExercise)
+        debugView.updateConfiguration(initialTuning, exerciseDefinition: initialExerciseDefinition)
+        tuningPanel.apply(configuration: initialTuning, exerciseDefinition: initialExerciseDefinition)
         updateCameraToggleButton(for: initialCameraPosition)
-        updateExerciseSelector(for: initialExercise)
+        updateExerciseSelector(for: initialExerciseDefinition.id)
         tuningPanel.onConfigurationChanged = { [weak self] config in
             guard let self else { return }
-            self.scheduleConfigurationUpdate(config, for: self.selectedExercise)
+            self.scheduleConfigurationUpdate(config, for: self.selectedExerciseID)
         }
         tuningPanel.onInteractionChanged = { [weak self] isInteracting in
             self?.setTuningInteractionState(isInteracting)
@@ -259,27 +256,29 @@ final class LiveCameraViewController: UIViewController {
 
     @objc private func exerciseSelectionChanged() {
         let index = exerciseSelector.selectedSegmentIndex
-        guard ExerciseMode.allCases.indices.contains(index) else { return }
-        applyExerciseSelection(ExerciseMode.allCases[index], persistSelection: true)
+        guard LiveCameraCoordinator.availableExercises.indices.contains(index) else { return }
+        applyExerciseSelection(LiveCameraCoordinator.availableExercises[index].id, persistSelection: true)
     }
 
-    private func applyExerciseSelection(_ exerciseMode: ExerciseMode, persistSelection: Bool) {
-        selectedExercise = exerciseMode
-        let tuning = loadSavedRepTuning(for: exerciseMode)
-        coordinator.setExercise(exerciseMode, configuration: tuning)
+    private func applyExerciseSelection(_ exerciseID: String, persistSelection: Bool) {
+        guard let exerciseDefinition = LiveCameraCoordinator.definition(for: exerciseID) else { return }
+
+        selectedExerciseID = exerciseDefinition.id
+        let tuning = loadSavedRepTuning(for: exerciseDefinition.id)
+        coordinator.setExercise(id: exerciseDefinition.id, configuration: tuning)
         repCountLabel.text = "0"
         lastRepCountForFeedback = 0
-        debugView.updateConfiguration(tuning, exerciseMode: exerciseMode)
-        tuningPanel.apply(configuration: tuning, exerciseMode: exerciseMode)
-        updateExerciseSelector(for: exerciseMode)
+        debugView.updateConfiguration(tuning, exerciseDefinition: exerciseDefinition)
+        tuningPanel.apply(configuration: tuning, exerciseDefinition: exerciseDefinition)
+        updateExerciseSelector(for: exerciseDefinition.id)
         lastDebugUpdateTime = 0
         if persistSelection {
-            saveExerciseMode(exerciseMode)
+            saveExerciseID(exerciseDefinition.id)
         }
     }
 
-    private func updateExerciseSelector(for exerciseMode: ExerciseMode) {
-        if let index = ExerciseMode.allCases.firstIndex(of: exerciseMode) {
+    private func updateExerciseSelector(for exerciseID: String) {
+        if let index = LiveCameraCoordinator.availableExercises.firstIndex(where: { $0.id == exerciseID }) {
             exerciseSelector.selectedSegmentIndex = index
         }
     }
@@ -304,7 +303,8 @@ final class LiveCameraViewController: UIViewController {
 
         if let output = model.output {
             if output.repCount > lastRepCountForFeedback {
-                repFeedbackPlayer.playRepSound()
+                let sound = LiveCameraCoordinator.definition(for: output.exerciseProfileID)?.repSound
+                repFeedbackPlayer.playRepSound(sound)
             }
             lastRepCountForFeedback = output.repCount
             repCountLabel.text = "\(output.repCount)"
@@ -321,7 +321,9 @@ final class LiveCameraViewController: UIViewController {
                 let now = CACurrentMediaTime()
                 if now - lastDebugUpdateTime >= debugUpdateInterval {
                     lastDebugUpdateTime = now
-                    debugView.update(output: output, exerciseMode: model.exerciseMode)
+                    let exerciseDefinition = LiveCameraCoordinator.definition(for: model.exerciseID)
+                        ?? LiveCameraCoordinator.defaultExercise
+                    debugView.update(output: output, exerciseDefinition: exerciseDefinition)
                 }
             }
         }
@@ -336,23 +338,29 @@ final class LiveCameraViewController: UIViewController {
 
     private func scheduleConfigurationUpdate(
         _ configuration: RepCountingConfiguration,
-        for exerciseMode: ExerciseMode
+        for exerciseID: String
     ) {
-        pendingConfigurationUpdate?.cancel()
+        guard selectedExerciseID == exerciseID else { return }
 
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            guard self.selectedExercise == exerciseMode else { return }
-            self.coordinator.updateRepCountingConfiguration(configuration)
-            self.debugView.updateConfiguration(configuration, exerciseMode: exerciseMode)
-            self.saveRepTuning(configuration, for: exerciseMode)
-        }
-
-        pendingConfigurationUpdate = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + configurationDebounceInterval, execute: work)
+        tuningUpdateCoordinator.apply(
+            configuration: configuration,
+            for: exerciseID,
+            shouldPersist: { [weak self] id in
+                self?.selectedExerciseID == id
+            },
+            applyNow: { [weak self] appliedConfig, id in
+                guard let self else { return }
+                self.coordinator.updateRepCountingConfiguration(appliedConfig)
+                guard let definition = LiveCameraCoordinator.definition(for: id) else { return }
+                self.debugView.updateConfiguration(appliedConfig, exerciseDefinition: definition)
+            },
+            persist: { [weak self] persistedConfig, id in
+                self?.saveRepTuning(persistedConfig, for: id)
+            }
+        )
     }
 
-    private func saveRepTuning(_ configuration: RepCountingConfiguration, for exerciseMode: ExerciseMode) {
+    private func saveRepTuning(_ configuration: RepCountingConfiguration, for exerciseID: String) {
         let values: [String: Double] = [
             "armingThreshold": Double(configuration.armingThreshold),
             "minPeakHeight": Double(configuration.minPeakHeight),
@@ -376,26 +384,26 @@ final class LiveCameraViewController: UIViewController {
             "spikeMaxDelta": Double(configuration.spikeMaxDelta),
             "emaAlpha": Double(configuration.emaAlpha),
         ]
-        UserDefaults.standard.set(values, forKey: tuningStorageKey(for: exerciseMode))
+        UserDefaults.standard.set(values, forKey: tuningStorageKey(for: exerciseID))
     }
 
-    private func saveExerciseMode(_ exerciseMode: ExerciseMode) {
-        UserDefaults.standard.set(exerciseMode.rawValue, forKey: Self.exerciseModeStorageKey)
+    private func saveExerciseID(_ exerciseID: String) {
+        UserDefaults.standard.set(exerciseID, forKey: Self.exerciseIDStorageKey)
     }
 
-    private func loadSavedExerciseMode() -> ExerciseMode {
-        guard let raw = UserDefaults.standard.string(forKey: Self.exerciseModeStorageKey) else {
-            return .squat
+    private func loadSavedExerciseID() -> String {
+        guard let savedID = UserDefaults.standard.string(forKey: Self.exerciseIDStorageKey) else {
+            return LiveCameraCoordinator.defaultExercise.id
         }
-        return ExerciseMode(rawValue: raw) ?? .squat
+        return LiveCameraCoordinator.definition(for: savedID)?.id ?? LiveCameraCoordinator.defaultExercise.id
     }
 
-    private static func tuningStorageKey(for exerciseMode: ExerciseMode) -> String {
-        "\(tuningStoragePrefix).\(exerciseMode.rawValue)"
+    private static func tuningStorageKey(for exerciseID: String) -> String {
+        "\(tuningStoragePrefix).\(exerciseID)"
     }
 
-    private func tuningStorageKey(for exerciseMode: ExerciseMode) -> String {
-        Self.tuningStorageKey(for: exerciseMode)
+    private func tuningStorageKey(for exerciseID: String) -> String {
+        Self.tuningStorageKey(for: exerciseID)
     }
 
     private func saveCameraPosition(_ position: AVCaptureDevice.Position) {
@@ -410,9 +418,9 @@ final class LiveCameraViewController: UIViewController {
         return rawValue == "back" ? .back : .front
     }
 
-    private func loadSavedRepTuning(for exerciseMode: ExerciseMode) -> RepCountingConfiguration {
+    private func loadSavedRepTuning(for exerciseID: String) -> RepCountingConfiguration {
         guard
-            let values = UserDefaults.standard.dictionary(forKey: tuningStorageKey(for: exerciseMode)),
+            let values = UserDefaults.standard.dictionary(forKey: tuningStorageKey(for: exerciseID)),
             let armingThreshold = values["armingThreshold"] as? Double,
             let minPeakHeight = values["minPeakHeight"] as? Double,
             let minValleyDepth = values["minValleyDepth"] as? Double,
@@ -426,10 +434,10 @@ final class LiveCameraViewController: UIViewController {
             let spikeMaxDelta = values["spikeMaxDelta"] as? Double,
             let emaAlpha = values["emaAlpha"] as? Double
         else {
-            return LiveCameraCoordinator.defaultRepTuning(for: exerciseMode)
+            return LiveCameraCoordinator.defaultRepTuning(for: exerciseID)
         }
 
-        let defaults = LiveCameraCoordinator.defaultRepTuning(for: exerciseMode)
+        let defaults = LiveCameraCoordinator.defaultRepTuning(for: exerciseID)
         let squatDescendEntryThreshold =
             (values["squatDescendEntryThreshold"] as? Double)
             ?? Double(defaults.squatDescendEntryThreshold)
@@ -460,7 +468,7 @@ final class LiveCameraViewController: UIViewController {
 
         return RepCountingConfiguration(
             armingThreshold: CGFloat(armingThreshold),
-            peakHistoryCapacity: LiveCameraCoordinator.defaultRepTuning.peakHistoryCapacity,
+            peakHistoryCapacity: defaults.peakHistoryCapacity,
             minPeakHeight: CGFloat(minPeakHeight),
             minValleyDepth: CGFloat(minValleyDepth),
             peakWindowSize: Int(peakWindowSize),

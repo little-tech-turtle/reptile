@@ -34,11 +34,39 @@ struct ReptileTests {
     @Test func defaultRepTuning_usesExpectedSquatThresholds() {
         let squat = LiveCameraCoordinator.defaultRepTuning(for: "squat")
 
-        #expect(squat.downThreshold == 0.92)
+        #expect(squat.downThreshold == 0.82)
         #expect(squat.squatDescendEntryThreshold == 0.18)
         #expect(squat.squatStandLockoutThreshold == 0.10)
-        #expect(squat.squatKneeBottomFlexionDegrees == 80)
-        #expect(squat.squatHipBottomFlexionDegrees == 60)
+        #expect(squat.squatKneeBottomFlexionDegrees == 72)
+        #expect(squat.squatHipBottomFlexionDegrees == 52)
+    }
+
+    @Test func squatTuningControls_areLeanAndTransparent() {
+        let controls = ExerciseCatalog.squat.tuningControls
+
+        #expect(controls.count == 4)
+        #expect(controls.map(\.id) == [
+            "squat-knee-bottom",
+            "squat-hip-bottom",
+            "squat-bottom-gate",
+            "squat-lockout-gate",
+        ])
+
+        #expect(controls.allSatisfy { !$0.hint.isEmpty })
+    }
+
+    @Test func curlTuningControls_areLeanAndTransparent() {
+        let controls = ExerciseCatalog.bicepCurl.tuningControls
+
+        #expect(controls.count == 4)
+        #expect(controls.map(\.id) == [
+            "curl-top-flexion",
+            "curl-lockout-flexion",
+            "curl-top-gate",
+            "curl-lockout-gate",
+        ])
+
+        #expect(controls.allSatisfy { !$0.hint.isEmpty })
     }
 
     @Test func exerciseRepSound_initializesWithExpectedValues() {
@@ -50,5 +78,9 @@ struct ReptileTests {
     @Test func unknownProfileID_impliesSilentFeedbackSelection() {
         let sound = ExerciseCatalog.definition(for: "not-real")?.repSound
         #expect(sound == nil)
+    }
+
+    @Test func tuningStoragePrefix_isVersion6() {
+        #expect(LiveCameraViewController.tuningStoragePrefix == "repTuning.v6")
     }
 }

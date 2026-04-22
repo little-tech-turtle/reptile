@@ -1,6 +1,6 @@
 import Foundation
 
-public protocol ExerciseProfile {
+public protocol ExerciseProfile: Sendable {
     var id: String { get }
 
     func makeMetricCalculator(configuration: RepCountingConfiguration) -> any MetricCalculator
@@ -49,7 +49,6 @@ public struct SquatExerciseProfile: ExerciseProfile {
     public func makeMetricFilters(configuration: RepCountingConfiguration) -> [any MetricFilter] {
         [
             SpikeRejectionFilter(maxDelta: configuration.spikeMaxDelta),
-            EMAMetricFilter(alpha: configuration.emaAlpha),
         ]
     }
 }

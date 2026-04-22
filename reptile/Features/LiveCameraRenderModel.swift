@@ -6,6 +6,6 @@ struct LiveCameraRenderModel {
     let statusText: String
     let joints: [VNHumanBodyPose3DObservation.JointName: CGPoint]
     let trackedJoints: Set<VNHumanBodyPose3DObservation.JointName>
-    let exerciseMode: ExerciseMode
+    let exerciseID: String
     let output: RepCounterOutput?
 }

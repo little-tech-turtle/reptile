@@ -1,88 +1,59 @@
-//
-//  DebugOverlayView.swift
-//  reptile
-//
-
 import UIKit
 import CameraKit
 import Vision
 
 final class DebugOverlayView: UIView {
-    private var exerciseMode: ExerciseMode = .squat
+    private var exerciseDefinition: ExerciseDefinition = ExerciseCatalog.defaultExercise
+    private var configuration: RepCountingConfiguration = ExerciseCatalog.defaultExercise.defaultTuning
     private var history: [CGFloat] = []
-    private var currentMetric: CGFloat? = nil
-    private var repCount: Int = 0
-    private var stateName: String = "--"
-    private var jointCount: Int = 0
-    private var trackedJointName: String = "--"
-    private var upThreshold: CGFloat = 0.20
-    private var downThreshold: CGFloat = 0.92
-    private var descendEntryThreshold: CGFloat = 0.12
-    private var bottomThreshold: CGFloat = 0.62
-    private var standLockoutThreshold: CGFloat = 0.10
-    private var minAmplitude: CGFloat = 0.18
-    private var kneeBottomFlexionDegrees: CGFloat = 80
-    private var hipBottomFlexionDegrees: CGFloat = 60
-    private var kneeLockoutFlexionDegrees: CGFloat = 18
-    private var hipLockoutFlexionDegrees: CGFloat = 20
-    private var currentKneeFlexionDegrees: CGFloat?
-    private var currentHipFlexionDegrees: CGFloat?
-    private var leftKneeFlexionDegrees: CGFloat?
-    private var rightKneeFlexionDegrees: CGFloat?
-    private var leftHipFlexionDegrees: CGFloat?
-    private var rightHipFlexionDegrees: CGFloat?
-    private var curlTopFlexionDegrees: CGFloat = 95
-    private var curlLockoutFlexionDegrees: CGFloat = 18
-    private var currentElbowFlexionDegrees: CGFloat?
-    private var leftElbowFlexionDegrees: CGFloat?
-    private var rightElbowFlexionDegrees: CGFloat?
-    private var activeCurlSide: CurlActiveSide?
+    private var poseDiagnosticsHistory: [PoseFrameDiagnostics] = []
+    private var elbowFlexionHistory: [CGFloat] = []
+    private var latestOutput: RepCounterOutput?
 
-    func updateConfiguration(_ configuration: RepCountingConfiguration, exerciseMode: ExerciseMode) {
-        self.exerciseMode = exerciseMode
-        upThreshold = configuration.upThreshold
-        downThreshold = configuration.downThreshold
-        descendEntryThreshold = configuration.squatDescendEntryThreshold
-        bottomThreshold = configuration.downThreshold
-        standLockoutThreshold = configuration.squatStandLockoutThreshold
-        minAmplitude = configuration.minAmplitude
-        kneeBottomFlexionDegrees = configuration.squatKneeBottomFlexionDegrees
-        hipBottomFlexionDegrees = configuration.squatHipBottomFlexionDegrees
-        kneeLockoutFlexionDegrees = configuration.squatKneeLockoutFlexionDegrees
-        hipLockoutFlexionDegrees = configuration.squatHipLockoutFlexionDegrees
-        curlTopFlexionDegrees = configuration.curlTopFlexionDegrees
-        curlLockoutFlexionDegrees = configuration.curlLockoutFlexionDegrees
+    private let metricHistoryCapacity = 150
+    private let poseHistoryCapacity = 120
+    private let elbowHistoryCapacity = 120
+
+    func updateConfiguration(_ configuration: RepCountingConfiguration, exerciseDefinition: ExerciseDefinition) {
+        if self.exerciseDefinition.id != exerciseDefinition.id {
+            history.removeAll()
+            poseDiagnosticsHistory.removeAll()
+            elbowFlexionHistory.removeAll()
+        }
+        self.configuration = configuration
+        self.exerciseDefinition = exerciseDefinition
         setNeedsDisplay()
     }
 
-    func update(output: RepCounterOutput, exerciseMode: ExerciseMode) {
-        self.exerciseMode = exerciseMode
-        if let m = output.currentMetric {
-            currentMetric = m
-            history.append(m)
-            if history.count > 150 { history.removeFirst() }
+    func update(output: RepCounterOutput, exerciseDefinition: ExerciseDefinition) {
+        self.exerciseDefinition = exerciseDefinition
+        latestOutput = output
+
+        if let metric = output.currentMetric {
+            history.append(metric)
+            if history.count > metricHistoryCapacity {
+                history.removeFirst()
+            }
         }
-        repCount = output.repCount
-        stateName = output.state.rawValue
-        jointCount = output.poseFrame.joints.count
-        trackedJointName = formatTrackedJoints(output.trackedJoints)
-        currentKneeFlexionDegrees = output.squatFlexionMetrics?.kneeFlexionDegrees
-        currentHipFlexionDegrees = output.squatFlexionMetrics?.hipFlexionDegrees
-        leftKneeFlexionDegrees = output.squatFlexionMetrics?.leftKneeFlexionDegrees
-        rightKneeFlexionDegrees = output.squatFlexionMetrics?.rightKneeFlexionDegrees
-        leftHipFlexionDegrees = output.squatFlexionMetrics?.leftHipFlexionDegrees
-        rightHipFlexionDegrees = output.squatFlexionMetrics?.rightHipFlexionDegrees
-        currentElbowFlexionDegrees = output.curlFlexionMetrics?.elbowFlexionDegrees
-        leftElbowFlexionDegrees = output.curlFlexionMetrics?.leftElbowFlexionDegrees
-        rightElbowFlexionDegrees = output.curlFlexionMetrics?.rightElbowFlexionDegrees
-        activeCurlSide = output.curlFlexionMetrics?.activeSide
+
+        poseDiagnosticsHistory.append(output.poseFrame.diagnostics)
+        if poseDiagnosticsHistory.count > poseHistoryCapacity {
+            poseDiagnosticsHistory.removeFirst()
+        }
+
+        if let elbowDegrees = output.exerciseDiagnostics?.scalars["curl.elbowFlexionDegrees"] {
+            elbowFlexionHistory.append(CGFloat(elbowDegrees))
+            if elbowFlexionHistory.count > elbowHistoryCapacity {
+                elbowFlexionHistory.removeFirst()
+            }
+        }
+
         setNeedsDisplay()
     }
 
     override func draw(_ rect: CGRect) {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
 
-        // 1. Background
         UIColor.black.withAlphaComponent(0.75).setFill()
         UIRectFill(rect)
 
@@ -90,43 +61,24 @@ final class DebugOverlayView: UIView {
         let waveRect = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: waveHeight)
         let statsRect = CGRect(x: rect.minX, y: rect.minY + waveHeight, width: rect.width, height: rect.height - waveHeight)
 
-        // 2. Waveform area
         drawThresholds(in: waveRect, ctx: ctx)
         drawWaveform(in: waveRect)
-
-        // 3. Stats row
         drawStats(in: statsRect)
     }
 
     private func yPosition(for value: CGFloat, in rect: CGRect) -> CGFloat {
-        // value 0.0 → bottom of rect, 1.0 → top of rect
         let clamped = max(0, min(1, value))
         return rect.maxY - clamped * rect.height
     }
 
     private func drawThresholds(in rect: CGRect, ctx: CGContext) {
-        let thresholds: [(value: CGFloat, color: UIColor, label: String)]
-        if exerciseMode == .squat {
-            thresholds = [
-                (standLockoutThreshold, .systemGreen, "lockout"),
-                (descendEntryThreshold, .systemOrange, "entry"),
-                (bottomThreshold, .systemRed, "bottom"),
-            ]
-        } else {
-            thresholds = [
-                (downThreshold, .systemGreen, "lockout"),
-                (upThreshold, .systemRed, "top"),
-            ]
-        }
-
+        let thresholds = exerciseDefinition.thresholdDefinitions
         let dash: [CGFloat] = [6, 4]
         let labelFont = UIFont.systemFont(ofSize: 10, weight: .medium)
-        let labelAttrs: [NSAttributedString.Key: Any] = [
-            .font: labelFont,
-        ]
+        let labelAttrs: [NSAttributedString.Key: Any] = [.font: labelFont]
 
         for threshold in thresholds {
-            let y = yPosition(for: threshold.value, in: rect)
+            let y = yPosition(for: threshold.value(configuration), in: rect)
 
             ctx.saveGState()
             ctx.setStrokeColor(threshold.color.cgColor)
@@ -137,11 +89,11 @@ final class DebugOverlayView: UIView {
             ctx.strokePath()
             ctx.restoreGState()
 
-            let labelAttrsColored = labelAttrs.merging([.foregroundColor: threshold.color]) { $1 }
-            let labelStr = NSAttributedString(string: threshold.label, attributes: labelAttrsColored)
-            let labelSize = labelStr.size()
+            let attrs = labelAttrs.merging([.foregroundColor: threshold.color]) { $1 }
+            let label = NSAttributedString(string: threshold.label, attributes: attrs)
+            let labelSize = label.size()
             let labelOrigin = CGPoint(x: rect.maxX - labelSize.width - 2, y: y - labelSize.height - 1)
-            labelStr.draw(at: labelOrigin)
+            label.draw(at: labelOrigin)
         }
     }
 
@@ -150,14 +102,13 @@ final class DebugOverlayView: UIView {
 
         let path = UIBezierPath()
         path.lineWidth = 1.5
-
         let columnWidth = rect.width / CGFloat(max(history.count - 1, 1))
 
-        for (i, value) in history.enumerated() {
-            let x = rect.minX + CGFloat(i) * columnWidth
+        for (index, value) in history.enumerated() {
+            let x = rect.minX + CGFloat(index) * columnWidth
             let y = yPosition(for: value, in: rect)
             let point = CGPoint(x: x, y: y)
-            if i == 0 {
+            if index == 0 {
                 path.move(to: point)
             } else {
                 path.addLine(to: point)
@@ -167,12 +118,10 @@ final class DebugOverlayView: UIView {
         UIColor.white.setStroke()
         path.stroke()
 
-        // Dot at most recent point
         if let last = history.last {
             let x = rect.minX + CGFloat(history.count - 1) * columnWidth
             let y = yPosition(for: last, in: rect)
-            let r: CGFloat = 4
-            let dotRect = CGRect(x: x - r, y: y - r, width: 2 * r, height: 2 * r)
+            let dotRect = CGRect(x: x - 4, y: y - 4, width: 8, height: 8)
             let dot = UIBezierPath(ovalIn: dotRect)
             UIColor.white.setFill()
             dot.fill()
@@ -180,28 +129,36 @@ final class DebugOverlayView: UIView {
     }
 
     private func drawStats(in rect: CGRect) {
-        let metricStr = currentMetric.map { String(format: "%.2f", $0) } ?? "--"
-        let text: String
-        if exerciseMode == .squat {
-            let kneeCurrent = currentKneeFlexionDegrees.map { String(format: "%.0f", $0) } ?? "--"
-            let hipCurrent = currentHipFlexionDegrees.map { String(format: "%.0f", $0) } ?? "--"
-            let kneePair = "L\(formatOptionalDegrees(leftKneeFlexionDegrees))/R\(formatOptionalDegrees(rightKneeFlexionDegrees))"
-            let hipPair = "L\(formatOptionalDegrees(leftHipFlexionDegrees))/R\(formatOptionalDegrees(rightHipFlexionDegrees))"
-            text = "exercise: squat   metric: \(metricStr)   state: \(stateName)   reps: \(repCount)   tracked: \(trackedJointName)   joints: \(jointCount)\n" +
-                   "knee: \(kneeCurrent)° (\(kneePair))  hip: \(hipCurrent)° (\(hipPair))\n" +
-                   "bottom>= knee \(String(format: "%.0f", kneeBottomFlexionDegrees))° / hip \(String(format: "%.0f", hipBottomFlexionDegrees))°   lockout<= knee \(String(format: "%.0f", kneeLockoutFlexionDegrees))° / hip \(String(format: "%.0f", hipLockoutFlexionDegrees))°   amp: \(String(format: "%.2f", minAmplitude))"
-        } else {
-            let elbowCurrent = currentElbowFlexionDegrees.map { String(format: "%.0f", $0) } ?? "--"
-            let elbowPair = "L\(formatOptionalDegrees(leftElbowFlexionDegrees))/R\(formatOptionalDegrees(rightElbowFlexionDegrees))"
-            let side = activeCurlSide?.rawValue ?? "--"
-            text = "exercise: curl   metric: \(metricStr)   state: \(stateName)   reps: \(repCount)   tracked: \(trackedJointName)   joints: \(jointCount)\n" +
-                   "elbow: \(elbowCurrent)° (\(elbowPair))   active: \(side)\n" +
-                   "top>= \(String(format: "%.0f", curlTopFlexionDegrees))°   lockout<= \(String(format: "%.0f", curlLockoutFlexionDegrees))°   amp: \(String(format: "%.2f", minAmplitude))"
+        let metric = latestOutput?.currentMetric.map { String(format: "%.2f", $0) } ?? "--"
+        let state = latestOutput?.state.rawValue ?? "--"
+        let reps = latestOutput?.repCount ?? 0
+        let joints = latestOutput?.poseFrame.joints.count ?? 0
+        let tracked = formatTrackedJoints(latestOutput?.trackedJoints ?? [])
+
+        var lines: [String] = [
+            "exercise: \(exerciseDefinition.id)   metric: \(metric)   state: \(state)   reps: \(reps)   tracked: \(tracked)   joints: \(joints)"
+        ]
+
+        if let poseLine = latestPoseDiagnosticsLine() {
+            lines.append(poseLine)
         }
+
+        if let rollingLine = rollingPoseDiagnosticsLine() {
+            lines.append(rollingLine)
+        }
+
+        lines.append(elbowJitterLine())
+
+        if let output = latestOutput {
+            lines.append(contentsOf: exerciseDefinition.diagnosticsText(output, configuration))
+        }
+
+        let text = lines.joined(separator: "\n")
         let attrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: UIColor.white,
             .font: UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),
         ]
+
         let str = NSAttributedString(string: text, attributes: attrs)
         let maxBounds = CGSize(width: rect.width - 20, height: rect.height - 6)
         let size = str.boundingRect(with: maxBounds, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil).size
@@ -212,8 +169,52 @@ final class DebugOverlayView: UIView {
         str.draw(with: CGRect(origin: origin, size: maxBounds), options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
     }
 
-    private func formatOptionalDegrees(_ value: CGFloat?) -> String {
-        value.map { String(format: "%.0f°", $0) } ?? "--"
+    private func latestPoseDiagnosticsLine() -> String? {
+        guard let d = poseDiagnosticsHistory.last else { return nil }
+        let confidence = d.observationConfidence.map { String(format: "%.2f", $0) } ?? "--"
+        return "pose3D raw:\(d.raw3DJointCount) stab:\(d.stabilized3DJointCount) drop:\(d.dropped3DJointCount) hold:\(d.held3DJointCount) clamp:\(d.clamped3DJointCount) conf:\(confidence)"
+    }
+
+    private func rollingPoseDiagnosticsLine() -> String? {
+        guard !poseDiagnosticsHistory.isEmpty else { return nil }
+
+        let expected = poseDiagnosticsHistory.reduce(0) { $0 + $1.expected3DJointCount }
+        let raw = poseDiagnosticsHistory.reduce(0) { $0 + $1.raw3DJointCount }
+        let dropped = poseDiagnosticsHistory.reduce(0) { $0 + $1.dropped3DJointCount }
+        let held = poseDiagnosticsHistory.reduce(0) { $0 + $1.held3DJointCount }
+        let clamped = poseDiagnosticsHistory.reduce(0) { $0 + $1.clamped3DJointCount }
+
+        let dropRate = expected > 0 ? (Double(dropped) / Double(expected)) * 100 : 0
+        let holdRecoveryRate = dropped > 0 ? (Double(held) / Double(dropped)) * 100 : 0
+        let clampRate = raw > 0 ? (Double(clamped) / Double(raw)) * 100 : 0
+
+        return String(
+            format: "pose window(%d): drop %.1f%%   hold %.1f%%   clamp %.1f%%",
+            poseDiagnosticsHistory.count,
+            dropRate,
+            holdRecoveryRate,
+            clampRate
+        )
+    }
+
+    private func elbowJitterLine() -> String {
+        guard elbowFlexionHistory.count >= 2 else {
+            return "elbow jitter(σ): --"
+        }
+
+        let sigma = standardDeviation(elbowFlexionHistory)
+        return String(format: "elbow jitter(σ): %.2f°", sigma)
+    }
+
+    private func standardDeviation(_ values: [CGFloat]) -> CGFloat {
+        guard !values.isEmpty else { return 0 }
+        let count = CGFloat(values.count)
+        let mean = values.reduce(0, +) / count
+        let variance = values.reduce(0) { partial, value in
+            let delta = value - mean
+            return partial + delta * delta
+        } / count
+        return sqrt(max(0, variance))
     }
 
     private func formatTrackedJoints(_ joints: [VNHumanBodyPose3DObservation.JointName]) -> String {
