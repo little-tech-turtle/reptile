@@ -206,6 +206,50 @@ private func squat3DJointFlexionPositions(
     return joints
 }
 
+/// Builds a single-side pose where hip and knee flexion can vary independently.
+private func isolatedSquatFlexion3DPositions(
+    kneeFlexionDegrees: CGFloat,
+    hipFlexionDegrees: CGFloat,
+    cameraZ: Float = 2.0
+) -> [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>] {
+    func radians(_ degrees: CGFloat) -> CGFloat {
+        degrees * .pi / 180
+    }
+
+    let clampedKnee = max(0, min(150, kneeFlexionDegrees))
+    let clampedHip = max(0, min(150, hipFlexionDegrees))
+
+    let thighLength: CGFloat = 0.45
+    let shinLength: CGFloat = 0.45
+    let torsoLength: CGFloat = 0.55
+
+    let hip = CGPoint(x: -0.18, y: -0.05)
+    let knee = CGPoint(x: hip.x, y: hip.y - thighLength)
+
+    // Hip interior angle = 180 - hip flexion.
+    let hipAngle = radians(180 - clampedHip)
+    let shoulder = CGPoint(
+        x: hip.x + sin(hipAngle) * torsoLength,
+        y: hip.y - cos(hipAngle) * torsoLength
+    )
+
+    // Knee interior angle = 180 - knee flexion.
+    let kneeAngle = radians(180 - clampedKnee)
+    let ankle = CGPoint(
+        x: knee.x + sin(kneeAngle) * shinLength,
+        y: knee.y + cos(kneeAngle) * shinLength
+    )
+
+    return [
+        .leftShoulder: SIMD3(x: Float(shoulder.x), y: Float(shoulder.y), z: cameraZ),
+        .leftHip: SIMD3(x: Float(hip.x), y: Float(hip.y), z: cameraZ),
+        .leftKnee: SIMD3(x: Float(knee.x), y: Float(knee.y), z: cameraZ),
+        .leftAnkle: SIMD3(x: Float(ankle.x), y: Float(ankle.y), z: cameraZ),
+        .spine: SIMD3(x: 0, y: 0.25, z: cameraZ),
+        .root: SIMD3(x: 0, y: -0.10, z: cameraZ),
+    ]
+}
+
 /// Builds synthetic 3D joints for bicep curls from elbow flexion angles.
 ///
 /// Elbow flexion: 0 = arm straight, larger values = stronger curl contraction.
@@ -1368,19 +1412,19 @@ private func feedSquatCounter(
         hipLockoutFlexionDegrees: 20
     )
 
-    let kneeOnly = calculator.calculate(from: makeFrame(positions3D: squat3DJointFlexionPositions(
+    let kneeOnly = calculator.calculate(from: makeFrame(positions3D: isolatedSquatFlexion3DPositions(
         kneeFlexionDegrees: 90,
         hipFlexionDegrees: 20
     )))
-    let hipOnly = calculator.calculate(from: makeFrame(positions3D: squat3DJointFlexionPositions(
+    let hipOnly = calculator.calculate(from: makeFrame(positions3D: isolatedSquatFlexion3DPositions(
         kneeFlexionDegrees: 20,
         hipFlexionDegrees: 75
     )))
 
     #expect(kneeOnly != nil)
     #expect(hipOnly != nil)
-    #expect(kneeOnly! < 0.55)
-    #expect(hipOnly! < 0.55)
+    #expect(kneeOnly! < 0.15)
+    #expect(hipOnly! < 0.20)
 }
 
 @Test func squatJointFlexion3D_fallsBackToSingleVisibleSide() {
