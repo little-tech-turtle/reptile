@@ -312,6 +312,95 @@ private func bicepCurl3DJointPositions(
     return joints
 }
 
+/// Builds synthetic 3D joints for bench press from elbow + shoulder flexion.
+///
+/// Flexion convention for both joints: 0 = lockout/stacked, larger = deeper bend.
+private func benchPress3DJointPositions(
+    leftElbowFlexionDegrees: CGFloat,
+    rightElbowFlexionDegrees: CGFloat,
+    leftShoulderFlexionDegrees: CGFloat,
+    rightShoulderFlexionDegrees: CGFloat,
+    cameraZ: Float = 2.0,
+    hideLeftArm: Bool = false,
+    hideRightArm: Bool = false
+) -> [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>] {
+    func radians(_ degrees: CGFloat) -> CGFloat {
+        degrees * .pi / 180
+    }
+
+    func side(
+        xOffset: Float,
+        elbowFlexionDegrees: CGFloat,
+        shoulderFlexionDegrees: CGFloat,
+        inwardDirection: CGFloat
+    ) -> (
+        shoulder: SIMD3<Float>,
+        elbow: SIMD3<Float>,
+        wrist: SIMD3<Float>,
+        hip: SIMD3<Float>
+    ) {
+        let upperArmLength: CGFloat = 0.30
+        let forearmLength: CGFloat = 0.28
+
+        let shoulder = CGPoint(x: 0, y: 0.35)
+        let hip = CGPoint(x: 0, y: -0.10)
+
+        let shoulderFlexion = max(0, min(150, shoulderFlexionDegrees))
+        let upperArmAngle = radians(-90 + inwardDirection * shoulderFlexion)
+        let elbow = CGPoint(
+            x: shoulder.x + cos(upperArmAngle) * upperArmLength,
+            y: shoulder.y + sin(upperArmAngle) * upperArmLength
+        )
+
+        let elbowFlexion = max(0, min(150, elbowFlexionDegrees))
+        let forearmAngle = upperArmAngle + inwardDirection * radians(elbowFlexion)
+        let wrist = CGPoint(
+            x: elbow.x + cos(forearmAngle) * forearmLength,
+            y: elbow.y + sin(forearmAngle) * forearmLength
+        )
+
+        return (
+            shoulder: SIMD3(x: xOffset + Float(shoulder.x), y: Float(shoulder.y), z: cameraZ),
+            elbow: SIMD3(x: xOffset + Float(elbow.x), y: Float(elbow.y), z: cameraZ),
+            wrist: SIMD3(x: xOffset + Float(wrist.x), y: Float(wrist.y), z: cameraZ),
+            hip: SIMD3(x: xOffset + Float(hip.x), y: Float(hip.y), z: cameraZ)
+        )
+    }
+
+    var joints: [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>] = [
+        .spine: SIMD3(x: 0, y: 0.20, z: cameraZ),
+        .root: SIMD3(x: 0, y: -0.05, z: cameraZ),
+    ]
+
+    if !hideLeftArm {
+        let left = side(
+            xOffset: -0.24,
+            elbowFlexionDegrees: leftElbowFlexionDegrees,
+            shoulderFlexionDegrees: leftShoulderFlexionDegrees,
+            inwardDirection: 1
+        )
+        joints[.leftShoulder] = left.shoulder
+        joints[.leftElbow] = left.elbow
+        joints[.leftWrist] = left.wrist
+        joints[.leftHip] = left.hip
+    }
+
+    if !hideRightArm {
+        let right = side(
+            xOffset: 0.24,
+            elbowFlexionDegrees: rightElbowFlexionDegrees,
+            shoulderFlexionDegrees: rightShoulderFlexionDegrees,
+            inwardDirection: -1
+        )
+        joints[.rightShoulder] = right.shoulder
+        joints[.rightElbow] = right.elbow
+        joints[.rightWrist] = right.wrist
+        joints[.rightHip] = right.hip
+    }
+
+    return joints
+}
+
 // MARK: - LocalExtremaPeakDetector
 
 @Test func peakDetector_detectsCleanMaximum() {
@@ -1248,11 +1337,8 @@ private func feedSquatCounter(
 @Test func squatExerciseProfile_usesConfiguredDepthThreshold() {
     let profile = SquatExerciseProfile()
     let configuration = RepCountingConfiguration(
-        minTimeBetweenReps: 0.4,
-        minAmplitude: 0.15,
-        downThreshold: 0.75,
-        squatDescendEntryThreshold: 0.12,
-        squatStandLockoutThreshold: 0.10
+        gates: .init(minTimeBetweenReps: 0.4, minAmplitude: 0.15, upThreshold: 0.20, downThreshold: 0.75),
+        squat: .init(descendEntryThreshold: 0.12, standLockoutThreshold: 0.10)
     )
 
     let candidate = profile.makeRepCounter(configuration: configuration)
@@ -1448,7 +1534,7 @@ private func feedSquatCounter(
 }
 
 @Test func repCounterPublisher_exposesCurrentFlexionMetrics() async throws {
-    let config = RepCountingConfiguration(spikeMaxDelta: 1.0, emaAlpha: 1.0)
+    let config = RepCountingConfiguration(filters: .init(spikeMaxDelta: 1.0, emaAlpha: 1.0))
     let publisher = RepCounterPublisher(configuration: config, exerciseProfile: SquatExerciseProfile())
 
     final class OutputBox: @unchecked Sendable {
@@ -1479,11 +1565,8 @@ private func feedSquatCounter(
     // synthetic joint frames reach the counter unmodified — filter behaviour
     // is covered by dedicated SpikeRejectionFilter/EMAMetricFilter tests.
     let config = RepCountingConfiguration(
-        minTimeBetweenReps: 0.4,
-        minAmplitude: 0.15,
-        downThreshold: 0.80,
-        spikeMaxDelta: 1.0,
-        emaAlpha: 1.0
+        gates: .init(minTimeBetweenReps: 0.4, minAmplitude: 0.15, upThreshold: 0.20, downThreshold: 0.80),
+        filters: .init(spikeMaxDelta: 1.0, emaAlpha: 1.0)
     )
     let publisher = RepCounterPublisher(configuration: config, exerciseProfile: profile)
 
@@ -1562,7 +1645,7 @@ private func feedSquatCounter(
 
 @Test func bicepCurlExerciseProfile_usesCycleCounter() {
     let profile = BicepCurlExerciseProfile()
-    let configuration = RepCountingConfiguration(minTimeBetweenReps: 0.45, minAmplitude: 0.30)
+    let configuration = RepCountingConfiguration(gates: .init(minTimeBetweenReps: 0.45, minAmplitude: 0.30, upThreshold: 0.20, downThreshold: 0.92))
 
     let counter = profile.makeRepCounter(configuration: configuration)
     #expect(counter is CurlPhaseRepCounter)
@@ -1645,8 +1728,117 @@ private func feedSquatCounter(
     #expect(switchedMetric! > 0.90)
 }
 
+@Test func benchPressFlexion3D_lockoutLowBottomHighWithEitherJointTolerance() {
+    let calculator = BenchPressFlexion3DMetricCalculator(
+        benchBottomElbowFlexionDegrees: 45,
+        benchBottomShoulderFlexionDegrees: 45,
+        benchLockoutElbowFlexionDegrees: 12,
+        benchLockoutShoulderFlexionDegrees: 12
+    )
+
+    let lockout = calculator.calculate(from: makeFrame(positions3D: benchPress3DJointPositions(
+        leftElbowFlexionDegrees: 8,
+        rightElbowFlexionDegrees: 10,
+        leftShoulderFlexionDegrees: 8,
+        rightShoulderFlexionDegrees: 10
+    ), seconds: 0.0))
+
+    let elbowBottomOnly = calculator.calculate(from: makeFrame(positions3D: benchPress3DJointPositions(
+        leftElbowFlexionDegrees: 48,
+        rightElbowFlexionDegrees: 46,
+        leftShoulderFlexionDegrees: 14,
+        rightShoulderFlexionDegrees: 12
+    ), seconds: 0.1))
+
+    let shoulderBottomOnly = calculator.calculate(from: makeFrame(positions3D: benchPress3DJointPositions(
+        leftElbowFlexionDegrees: 14,
+        rightElbowFlexionDegrees: 12,
+        leftShoulderFlexionDegrees: 52,
+        rightShoulderFlexionDegrees: 50
+    ), seconds: 0.2))
+
+    #expect(lockout != nil)
+    #expect(elbowBottomOnly != nil)
+    #expect(shoulderBottomOnly != nil)
+    #expect(lockout! < 0.15)
+    #expect(elbowBottomOnly! > 0.85)
+    #expect(shoulderBottomOnly! > 0.85)
+}
+
+@Test func benchPressExerciseProfile_usesCycleCounterAndSmoothingFilters() {
+    let profile = BenchPressExerciseProfile()
+    let configuration = RepCountingConfiguration(gates: .init(minTimeBetweenReps: 0.45, minAmplitude: 0.22, upThreshold: 0.20, downThreshold: 0.92))
+
+    let counter = profile.makeRepCounter(configuration: configuration)
+    let filters = profile.makeMetricFilters(configuration: configuration)
+
+    #expect(counter is CurlPhaseRepCounter)
+    #expect(filters.count == 2)
+    #expect(filters.first is SpikeRejectionFilter)
+    #expect(filters.last is EMAMetricFilter)
+}
+
+@Test func repCounterPublisher_countsTwoBenchPressReps() async throws {
+    let config = RepCountingConfiguration(
+        gates: .init(minTimeBetweenReps: 0.4, minAmplitude: 0.20, upThreshold: 0.60, downThreshold: 0.30),
+        filters: .init(spikeMaxDelta: 1.0, emaAlpha: 1.0),
+        bench: .init(
+            bottomElbowFlexionDegrees: 45,
+            bottomShoulderFlexionDegrees: 45,
+            lockoutElbowFlexionDegrees: 12,
+            lockoutShoulderFlexionDegrees: 12
+        )
+    )
+    let publisher = RepCounterPublisher(configuration: config, exerciseProfile: BenchPressExerciseProfile())
+
+    final class OutputBox: @unchecked Sendable {
+        var lastRepCount = 0
+    }
+    let box = OutputBox()
+    let cancellable = publisher.repCounts.sink { box.lastRepCount = $0.repCount }
+
+    let cycle: [(elbow: CGFloat, shoulder: CGFloat)] = [
+        (10, 10),
+        (18, 12),
+        (30, 15),
+        (44, 18),
+        (48, 18),
+        (36, 22),
+        (22, 34),
+        (14, 46),
+        (12, 48),
+        (12, 28),
+        (10, 14),
+        (10, 10),
+    ]
+
+    func ingestCycle(startSeconds: Double) {
+        for (i, frame) in cycle.enumerated() {
+            let t = CMTime(seconds: startSeconds + Double(i) * 0.1, preferredTimescale: 600)
+            publisher.ingest(PoseFrame(
+                timestamp: t,
+                joints: [:],
+                positions3D: benchPress3DJointPositions(
+                    leftElbowFlexionDegrees: frame.elbow,
+                    rightElbowFlexionDegrees: max(10, frame.elbow - 4),
+                    leftShoulderFlexionDegrees: frame.shoulder,
+                    rightShoulderFlexionDegrees: max(10, frame.shoulder - 4)
+                )
+            ))
+        }
+    }
+
+    ingestCycle(startSeconds: 0.0)
+    ingestCycle(startSeconds: 1.7)
+
+    try await Task.sleep(nanoseconds: 550_000_000)
+    _ = cancellable
+
+    #expect(box.lastRepCount == 2)
+}
+
 @Test func repCounterPublisher_exposesCurrentCurlFlexionMetrics() async throws {
-    let config = RepCountingConfiguration(spikeMaxDelta: 1.0, emaAlpha: 1.0)
+    let config = RepCountingConfiguration(filters: .init(spikeMaxDelta: 1.0, emaAlpha: 1.0))
     let publisher = RepCounterPublisher(configuration: config, exerciseProfile: BicepCurlExerciseProfile())
 
     final class OutputBox: @unchecked Sendable {
@@ -1672,12 +1864,8 @@ private func feedSquatCounter(
 
 @Test func repCounterPublisher_countsTwoBicepCurlReps() async throws {
     let config = RepCountingConfiguration(
-        minTimeBetweenReps: 0.4,
-        minAmplitude: 0.25,
-        upThreshold: 0.65,
-        downThreshold: 0.25,
-        spikeMaxDelta: 1.0,
-        emaAlpha: 1.0
+        gates: .init(minTimeBetweenReps: 0.4, minAmplitude: 0.25, upThreshold: 0.65, downThreshold: 0.25),
+        filters: .init(spikeMaxDelta: 1.0, emaAlpha: 1.0)
     )
     let publisher = RepCounterPublisher(configuration: config, exerciseProfile: BicepCurlExerciseProfile())
 
@@ -1713,12 +1901,8 @@ private func feedSquatCounter(
 
 @Test func repCounterPublisher_doesNotOvercountBicepCurlWithNoisyOppositeArm() async throws {
     let config = RepCountingConfiguration(
-        minTimeBetweenReps: 0.35,
-        minAmplitude: 0.22,
-        upThreshold: 0.62,
-        downThreshold: 0.26,
-        spikeMaxDelta: 1.0,
-        emaAlpha: 1.0
+        gates: .init(minTimeBetweenReps: 0.35, minAmplitude: 0.22, upThreshold: 0.62, downThreshold: 0.26),
+        filters: .init(spikeMaxDelta: 1.0, emaAlpha: 1.0)
     )
     let publisher = RepCounterPublisher(configuration: config, exerciseProfile: BicepCurlExerciseProfile())
 
@@ -1751,12 +1935,8 @@ private func feedSquatCounter(
 
 @Test func repCounterPublisher_countsBicepCurlWhenReturningNearStartWithoutFullLockout() async throws {
     let config = RepCountingConfiguration(
-        minTimeBetweenReps: 0.35,
-        minAmplitude: 0.22,
-        upThreshold: 0.62,
-        downThreshold: 0.25,
-        spikeMaxDelta: 1.0,
-        emaAlpha: 1.0
+        gates: .init(minTimeBetweenReps: 0.35, minAmplitude: 0.22, upThreshold: 0.62, downThreshold: 0.25),
+        filters: .init(spikeMaxDelta: 1.0, emaAlpha: 1.0)
     )
     let publisher = RepCounterPublisher(configuration: config, exerciseProfile: BicepCurlExerciseProfile())
 
@@ -1788,12 +1968,8 @@ private func feedSquatCounter(
 
 @Test func repCounterPublisher_doesNotCountBicepCurlIfItNeverReturnsNearStart() async throws {
     let config = RepCountingConfiguration(
-        minTimeBetweenReps: 0.35,
-        minAmplitude: 0.22,
-        upThreshold: 0.62,
-        downThreshold: 0.25,
-        spikeMaxDelta: 1.0,
-        emaAlpha: 1.0
+        gates: .init(minTimeBetweenReps: 0.35, minAmplitude: 0.22, upThreshold: 0.62, downThreshold: 0.25),
+        filters: .init(spikeMaxDelta: 1.0, emaAlpha: 1.0)
     )
     let publisher = RepCounterPublisher(configuration: config, exerciseProfile: BicepCurlExerciseProfile())
 
@@ -1824,7 +2000,7 @@ private func feedSquatCounter(
 }
 
 @Test func repCounterPublisher_switchingExerciseResetsCount() async throws {
-    let config = RepCountingConfiguration(spikeMaxDelta: 1.0, emaAlpha: 1.0)
+    let config = RepCountingConfiguration(filters: .init(spikeMaxDelta: 1.0, emaAlpha: 1.0))
     let publisher = RepCounterPublisher(configuration: config, exerciseProfile: BicepCurlExerciseProfile())
 
     final class OutputBox: @unchecked Sendable {
@@ -1862,7 +2038,7 @@ private func feedSquatCounter(
 }
 
 @Test func repCounterPublisher_switchingProfilesRetainsSquatAndCurlCounting() async throws {
-    let config = RepCountingConfiguration(spikeMaxDelta: 1.0, emaAlpha: 1.0)
+    let config = RepCountingConfiguration(filters: .init(spikeMaxDelta: 1.0, emaAlpha: 1.0))
     let publisher = RepCounterPublisher(configuration: config, exerciseProfile: SquatExerciseProfile())
 
     final class OutputBox: @unchecked Sendable {
@@ -1925,14 +2101,9 @@ private func feedSquatCounter(
 
 @Test func repCounterPublisher_countsAlternatingArmsWithConfiguredLockoutRange() async throws {
     let config = RepCountingConfiguration(
-        minTimeBetweenReps: 0.4,
-        minAmplitude: 0.25,
-        upThreshold: 0.60,
-        downThreshold: 0.35,
-        curlTopFlexionDegrees: 128,
-        curlLockoutFlexionDegrees: 34,
-        spikeMaxDelta: 1.0,
-        emaAlpha: 1.0
+        gates: .init(minTimeBetweenReps: 0.4, minAmplitude: 0.25, upThreshold: 0.60, downThreshold: 0.35),
+        filters: .init(spikeMaxDelta: 1.0, emaAlpha: 1.0),
+        curl: .init(topFlexionDegrees: 128, lockoutFlexionDegrees: 34)
     )
     let publisher = RepCounterPublisher(configuration: config, exerciseProfile: BicepCurlExerciseProfile())
 

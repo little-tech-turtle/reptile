@@ -38,27 +38,7 @@ enum ExerciseCatalog {
         title: "Squat",
         shortTitle: "Squat",
         repSound: ExerciseRepSound(resourceName: "ah", fileExtension: "wav"),
-        defaultTuning: RepCountingConfiguration(
-            armingThreshold: 0.5,
-            minPeakHeight: 0.08,
-            minValleyDepth: 0.08,
-            peakWindowSize: 5,
-            minTimeBetweenReps: 0.6,
-            minAmplitude: 0.55,
-            upThreshold: 0.20,
-            downThreshold: 0.82,
-            squatDescendEntryThreshold: 0.18,
-            squatStandLockoutThreshold: 0.10,
-            squatKneeBottomFlexionDegrees: 72,
-            squatHipBottomFlexionDegrees: 52,
-            squatKneeLockoutFlexionDegrees: 18,
-            squatHipLockoutFlexionDegrees: 20,
-            squatMaxSideAsymmetryDegrees: 25,
-            inactivityResetSeconds: 3.0,
-            activityDeltaThreshold: 0.015,
-            spikeMaxDelta: 0.25,
-            emaAlpha: 0.3
-        ),
+        defaultTuning: .squatDefault,
         makeProfile: { SquatExerciseProfile() },
         tuningControls: [
             .init(
@@ -69,8 +49,8 @@ enum ExerciseCatalog {
                 max: 130,
                 format: "%.0f°",
                 displayScale: 1,
-                readValue: { Float($0.squatKneeBottomFlexionDegrees) },
-                writeValue: { $0.squatKneeBottomFlexionDegrees = CGFloat($1) }
+                readValue: { Float($0.squat.kneeBottomFlexionDegrees) },
+                writeValue: { $0.squat.kneeBottomFlexionDegrees = CGFloat($1) }
             ),
             .init(
                 id: "squat-hip-bottom",
@@ -80,8 +60,8 @@ enum ExerciseCatalog {
                 max: 120,
                 format: "%.0f°",
                 displayScale: 1,
-                readValue: { Float($0.squatHipBottomFlexionDegrees) },
-                writeValue: { $0.squatHipBottomFlexionDegrees = CGFloat($1) }
+                readValue: { Float($0.squat.hipBottomFlexionDegrees) },
+                writeValue: { $0.squat.hipBottomFlexionDegrees = CGFloat($1) }
             ),
             .init(
                 id: "squat-bottom-gate",
@@ -91,8 +71,8 @@ enum ExerciseCatalog {
                 max: 0.95,
                 format: "%.0f%%",
                 displayScale: 100,
-                readValue: { Float($0.downThreshold) },
-                writeValue: { $0.downThreshold = CGFloat($1) }
+                readValue: { Float($0.gates.downThreshold) },
+                writeValue: { $0.gates.downThreshold = CGFloat($1) }
             ),
             .init(
                 id: "squat-lockout-gate",
@@ -102,14 +82,14 @@ enum ExerciseCatalog {
                 max: 0.30,
                 format: "%.0f%%",
                 displayScale: 100,
-                readValue: { Float($0.squatStandLockoutThreshold) },
-                writeValue: { $0.squatStandLockoutThreshold = CGFloat($1) }
+                readValue: { Float($0.squat.standLockoutThreshold) },
+                writeValue: { $0.squat.standLockoutThreshold = CGFloat($1) }
             ),
         ],
         thresholdDefinitions: [
-            .init(label: "lockout", color: .systemGreen, value: { $0.squatStandLockoutThreshold }),
-            .init(label: "entry", color: .systemOrange, value: { $0.squatDescendEntryThreshold }),
-            .init(label: "bottom", color: .systemRed, value: { $0.downThreshold }),
+            .init(label: "lockout", color: .systemGreen, value: { $0.squat.standLockoutThreshold }),
+            .init(label: "entry", color: .systemOrange, value: { $0.squat.descendEntryThreshold }),
+            .init(label: "bottom", color: .systemRed, value: { $0.gates.downThreshold }),
         ],
         diagnosticsText: { output, configuration in
             let scalars = output.exerciseDiagnostics?.scalars ?? [:]
@@ -121,7 +101,7 @@ enum ExerciseCatalog {
             let rightHip = formatDegree(scalars["squat.rightHipFlexionDegrees"])
             return [
                 "knee: \(knee)° (L\(leftKnee)/R\(rightKnee))  hip: \(hip)° (L\(leftHip)/R\(rightHip))",
-                "bottom>= knee \(formatDegree(Double(configuration.squatKneeBottomFlexionDegrees)))° / hip \(formatDegree(Double(configuration.squatHipBottomFlexionDegrees)))°   lockout<= knee \(formatDegree(Double(configuration.squatKneeLockoutFlexionDegrees)))° / hip \(formatDegree(Double(configuration.squatHipLockoutFlexionDegrees)))°   amp: \(String(format: "%.2f", configuration.minAmplitude))",
+                "bottom>= knee \(formatDegree(Double(configuration.squat.kneeBottomFlexionDegrees)))° / hip \(formatDegree(Double(configuration.squat.hipBottomFlexionDegrees)))°   lockout<= knee \(formatDegree(Double(configuration.squat.kneeLockoutFlexionDegrees)))° / hip \(formatDegree(Double(configuration.squat.hipLockoutFlexionDegrees)))°   amp: \(String(format: "%.2f", configuration.gates.minAmplitude))",
             ]
         }
     )
@@ -131,29 +111,7 @@ enum ExerciseCatalog {
         title: "Bicep Curl",
         shortTitle: "Curl",
         repSound: nil,
-        defaultTuning: RepCountingConfiguration(
-            armingThreshold: 0.5,
-            minPeakHeight: 0.08,
-            minValleyDepth: 0.08,
-            peakWindowSize: 5,
-            minTimeBetweenReps: 0.5,
-            minAmplitude: 0.25,
-            upThreshold: 0.60,
-            downThreshold: 0.35,
-            squatDescendEntryThreshold: 0.18,
-            squatStandLockoutThreshold: 0.10,
-            squatKneeBottomFlexionDegrees: 80,
-            squatHipBottomFlexionDegrees: 60,
-            squatKneeLockoutFlexionDegrees: 18,
-            squatHipLockoutFlexionDegrees: 20,
-            squatMaxSideAsymmetryDegrees: 25,
-            curlTopFlexionDegrees: 128,
-            curlLockoutFlexionDegrees: 34,
-            inactivityResetSeconds: 3.0,
-            activityDeltaThreshold: 0.015,
-            spikeMaxDelta: 0.25,
-            emaAlpha: 0.3
-        ),
+        defaultTuning: .bicepCurlDefault,
         makeProfile: { BicepCurlExerciseProfile() },
         tuningControls: [
             .init(
@@ -164,8 +122,8 @@ enum ExerciseCatalog {
                 max: 140,
                 format: "%.0f°",
                 displayScale: 1,
-                readValue: { Float($0.curlTopFlexionDegrees) },
-                writeValue: { $0.curlTopFlexionDegrees = CGFloat($1) }
+                readValue: { Float($0.curl.topFlexionDegrees) },
+                writeValue: { $0.curl.topFlexionDegrees = CGFloat($1) }
             ),
             .init(
                 id: "curl-lockout-flexion",
@@ -175,8 +133,8 @@ enum ExerciseCatalog {
                 max: 50,
                 format: "%.0f°",
                 displayScale: 1,
-                readValue: { Float($0.curlLockoutFlexionDegrees) },
-                writeValue: { $0.curlLockoutFlexionDegrees = CGFloat($1) }
+                readValue: { Float($0.curl.lockoutFlexionDegrees) },
+                writeValue: { $0.curl.lockoutFlexionDegrees = CGFloat($1) }
             ),
             .init(
                 id: "curl-top-gate",
@@ -186,8 +144,8 @@ enum ExerciseCatalog {
                 max: 0.95,
                 format: "%.0f%%",
                 displayScale: 100,
-                readValue: { Float($0.upThreshold) },
-                writeValue: { $0.upThreshold = CGFloat($1) }
+                readValue: { Float($0.gates.upThreshold) },
+                writeValue: { $0.gates.upThreshold = CGFloat($1) }
             ),
             .init(
                 id: "curl-lockout-gate",
@@ -197,13 +155,13 @@ enum ExerciseCatalog {
                 max: 0.60,
                 format: "%.0f%%",
                 displayScale: 100,
-                readValue: { Float($0.downThreshold) },
-                writeValue: { $0.downThreshold = CGFloat($1) }
+                readValue: { Float($0.gates.downThreshold) },
+                writeValue: { $0.gates.downThreshold = CGFloat($1) }
             ),
         ],
         thresholdDefinitions: [
-            .init(label: "lockout", color: .systemGreen, value: { $0.downThreshold }),
-            .init(label: "top", color: .systemRed, value: { $0.upThreshold }),
+            .init(label: "lockout", color: .systemGreen, value: { $0.gates.downThreshold }),
+            .init(label: "top", color: .systemRed, value: { $0.gates.upThreshold }),
         ],
         diagnosticsText: { output, configuration in
             let scalars = output.exerciseDiagnostics?.scalars ?? [:]
@@ -214,12 +172,84 @@ enum ExerciseCatalog {
             let active = labels["curl.activeSide"] ?? "--"
             return [
                 "elbow: \(elbow)° (L\(left)/R\(right))   active: \(active)",
-                "top>= \(formatDegree(Double(configuration.curlTopFlexionDegrees)))°   lockout<= \(formatDegree(Double(configuration.curlLockoutFlexionDegrees)))°   gates: top>=\(String(format: "%.2f", configuration.upThreshold)) lockout<=\(String(format: "%.2f", configuration.downThreshold))   amp: \(String(format: "%.2f", configuration.minAmplitude))",
+                "top>= \(formatDegree(Double(configuration.curl.topFlexionDegrees)))°   lockout<= \(formatDegree(Double(configuration.curl.lockoutFlexionDegrees)))°   gates: top>=\(String(format: "%.2f", configuration.gates.upThreshold)) lockout<=\(String(format: "%.2f", configuration.gates.downThreshold))   amp: \(String(format: "%.2f", configuration.gates.minAmplitude))",
             ]
         }
     )
 
-    static let all: [ExerciseDefinition] = [squat, bicepCurl]
+    static let benchPress = ExerciseDefinition(
+        id: "benchPress",
+        title: "Bench Press",
+        shortTitle: "Bench",
+        repSound: nil,
+        defaultTuning: .benchPressDefault,
+        makeProfile: { BenchPressExerciseProfile() },
+        tuningControls: [
+            .init(
+                id: "bench-bottom-elbow",
+                title: "Bottom elbow target",
+                hint: "Lower = easier elbow depth trigger.",
+                min: 20,
+                max: 95,
+                format: "%.0f°",
+                displayScale: 1,
+                readValue: { Float($0.bench.bottomElbowFlexionDegrees) },
+                writeValue: { $0.bench.bottomElbowFlexionDegrees = CGFloat($1) }
+            ),
+            .init(
+                id: "bench-lockout-elbow",
+                title: "Lockout elbow max",
+                hint: "Higher = easier elbow lockout recognition.",
+                min: 0,
+                max: 40,
+                format: "%.0f°",
+                displayScale: 1,
+                readValue: { Float($0.bench.lockoutElbowFlexionDegrees) },
+                writeValue: { $0.bench.lockoutElbowFlexionDegrees = CGFloat($1) }
+            ),
+            .init(
+                id: "bench-bottom-shoulder",
+                title: "Bottom shoulder target",
+                hint: "Lower = easier shoulder depth trigger.",
+                min: 20,
+                max: 95,
+                format: "%.0f°",
+                displayScale: 1,
+                readValue: { Float($0.bench.bottomShoulderFlexionDegrees) },
+                writeValue: { $0.bench.bottomShoulderFlexionDegrees = CGFloat($1) }
+            ),
+            .init(
+                id: "bench-lockout-shoulder",
+                title: "Lockout shoulder max",
+                hint: "Higher = easier shoulder lockout recognition.",
+                min: 0,
+                max: 40,
+                format: "%.0f°",
+                displayScale: 1,
+                readValue: { Float($0.bench.lockoutShoulderFlexionDegrees) },
+                writeValue: { $0.bench.lockoutShoulderFlexionDegrees = CGFloat($1) }
+            ),
+        ],
+        thresholdDefinitions: [
+            .init(label: "lockout", color: .systemGreen, value: { $0.gates.downThreshold }),
+            .init(label: "bottom", color: .systemRed, value: { $0.gates.upThreshold }),
+        ],
+        diagnosticsText: { output, configuration in
+            let scalars = output.exerciseDiagnostics?.scalars ?? [:]
+            let elbow = formatDegree(scalars["bench.elbowFlexionDegrees"])
+            let shoulder = formatDegree(scalars["bench.shoulderFlexionDegrees"])
+            let leftElbow = formatDegree(scalars["bench.leftElbowFlexionDegrees"])
+            let rightElbow = formatDegree(scalars["bench.rightElbowFlexionDegrees"])
+            let leftShoulder = formatDegree(scalars["bench.leftShoulderFlexionDegrees"])
+            let rightShoulder = formatDegree(scalars["bench.rightShoulderFlexionDegrees"])
+            return [
+                "elbow: \(elbow)° (L\(leftElbow)/R\(rightElbow))  shoulder: \(shoulder)° (L\(leftShoulder)/R\(rightShoulder))",
+                "bottom>= elbow \(formatDegree(Double(configuration.bench.bottomElbowFlexionDegrees)))° / shoulder \(formatDegree(Double(configuration.bench.bottomShoulderFlexionDegrees)))°   lockout<= elbow \(formatDegree(Double(configuration.bench.lockoutElbowFlexionDegrees)))° / shoulder \(formatDegree(Double(configuration.bench.lockoutShoulderFlexionDegrees)))°   gates: bottom>=\(String(format: "%.2f", configuration.gates.upThreshold)) lockout<=\(String(format: "%.2f", configuration.gates.downThreshold))   amp: \(String(format: "%.2f", configuration.gates.minAmplitude))",
+            ]
+        }
+    )
+
+    static let all: [ExerciseDefinition] = [squat, bicepCurl, benchPress]
 
     static var defaultExercise: ExerciseDefinition { squat }
 

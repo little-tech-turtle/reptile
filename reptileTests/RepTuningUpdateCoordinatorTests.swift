@@ -16,17 +16,17 @@ struct RepTuningUpdateCoordinatorTests {
         var persistedDownThresholds: [CGFloat] = []
 
         var config = LiveCameraCoordinator.defaultRepTuning(for: "bicepCurl")
-        config.downThreshold = 0.41
+        config.gates.downThreshold = 0.41
 
         coordinator.apply(
             configuration: config,
             for: "bicepCurl",
             shouldPersist: { _ in true },
             applyNow: { appliedConfig, _ in
-                appliedDownThresholds.append(appliedConfig.downThreshold)
+                appliedDownThresholds.append(appliedConfig.gates.downThreshold)
             },
             persist: { persistedConfig, _ in
-                persistedDownThresholds.append(persistedConfig.downThreshold)
+                persistedDownThresholds.append(persistedConfig.gates.downThreshold)
             }
         )
 
@@ -47,9 +47,9 @@ struct RepTuningUpdateCoordinatorTests {
         var persistedDownThresholds: [CGFloat] = []
 
         var first = LiveCameraCoordinator.defaultRepTuning(for: "bicepCurl")
-        first.downThreshold = 0.28
+        first.gates.downThreshold = 0.28
         var second = LiveCameraCoordinator.defaultRepTuning(for: "bicepCurl")
-        second.downThreshold = 0.45
+        second.gates.downThreshold = 0.45
 
         coordinator.apply(
             configuration: first,
@@ -57,7 +57,7 @@ struct RepTuningUpdateCoordinatorTests {
             shouldPersist: { _ in true },
             applyNow: { _, _ in },
             persist: { persistedConfig, _ in
-                persistedDownThresholds.append(persistedConfig.downThreshold)
+                persistedDownThresholds.append(persistedConfig.gates.downThreshold)
             }
         )
 
@@ -67,7 +67,7 @@ struct RepTuningUpdateCoordinatorTests {
             shouldPersist: { _ in true },
             applyNow: { _, _ in },
             persist: { persistedConfig, _ in
-                persistedDownThresholds.append(persistedConfig.downThreshold)
+                persistedDownThresholds.append(persistedConfig.gates.downThreshold)
             }
         )
 

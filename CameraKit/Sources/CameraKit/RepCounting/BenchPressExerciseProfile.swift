@@ -1,14 +1,16 @@
 import Foundation
 
-public struct BicepCurlExerciseProfile: ExerciseProfile {
-    public let id: String = "bicepCurl"
+public struct BenchPressExerciseProfile: ExerciseProfile {
+    public let id: String = "benchPress"
 
     public init() {}
 
     public func makeMetricCalculator(configuration: RepCountingConfiguration) -> any MetricCalculator {
-        BicepCurlFlexion3DMetricCalculator(
-            curlTopFlexionDegrees: configuration.curl.topFlexionDegrees,
-            curlLockoutFlexionDegrees: configuration.curl.lockoutFlexionDegrees
+        BenchPressFlexion3DMetricCalculator(
+            benchBottomElbowFlexionDegrees: configuration.bench.bottomElbowFlexionDegrees,
+            benchBottomShoulderFlexionDegrees: configuration.bench.bottomShoulderFlexionDegrees,
+            benchLockoutElbowFlexionDegrees: configuration.bench.lockoutElbowFlexionDegrees,
+            benchLockoutShoulderFlexionDegrees: configuration.bench.lockoutShoulderFlexionDegrees
         )
     }
 

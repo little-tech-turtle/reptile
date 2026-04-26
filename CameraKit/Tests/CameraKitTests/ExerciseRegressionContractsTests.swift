@@ -10,8 +10,8 @@ struct ExerciseRegressionContractsTests {
     @Test func squatRegression_contractStableWhenCurlThresholdsChange() async throws {
         let baseline = makeSquatRegressionConfiguration()
         var curlTweaked = baseline
-        curlTweaked.curlTopFlexionDegrees = 150
-        curlTweaked.curlLockoutFlexionDegrees = 5
+        curlTweaked.curl.topFlexionDegrees = 150
+        curlTweaked.curl.lockoutFlexionDegrees = 5
 
         let baselineCount = try await runSquatCycles(configuration: baseline, cycleCount: 2)
         let tweakedCount = try await runSquatCycles(configuration: curlTweaked, cycleCount: 2)
@@ -23,16 +23,36 @@ struct ExerciseRegressionContractsTests {
     @Test func curlRegression_contractStableWhenSquatThresholdsChange() async throws {
         let baseline = makeCurlRegressionConfiguration()
         var squatTweaked = baseline
-        squatTweaked.squatDescendEntryThreshold = 0.35
-        squatTweaked.squatStandLockoutThreshold = 0.02
-        squatTweaked.squatKneeBottomFlexionDegrees = 120
-        squatTweaked.squatHipBottomFlexionDegrees = 95
-        squatTweaked.squatKneeLockoutFlexionDegrees = 35
-        squatTweaked.squatHipLockoutFlexionDegrees = 40
-        squatTweaked.squatMaxSideAsymmetryDegrees = 10
+        squatTweaked.squat.descendEntryThreshold = 0.35
+        squatTweaked.squat.standLockoutThreshold = 0.02
+        squatTweaked.squat.kneeBottomFlexionDegrees = 120
+        squatTweaked.squat.hipBottomFlexionDegrees = 95
+        squatTweaked.squat.kneeLockoutFlexionDegrees = 35
+        squatTweaked.squat.hipLockoutFlexionDegrees = 40
+        squatTweaked.squat.maxSideAsymmetryDegrees = 10
 
         let baselineCount = try await runCurlCycles(configuration: baseline, cycleCount: 2)
         let tweakedCount = try await runCurlCycles(configuration: squatTweaked, cycleCount: 2)
+
+        #expect(baselineCount == 2)
+        #expect(tweakedCount == baselineCount)
+    }
+
+    @Test func benchRegression_contractStableWhenSquatAndCurlThresholdsChange() async throws {
+        let baseline = makeBenchRegressionConfiguration()
+        var nonBenchTweaked = baseline
+        nonBenchTweaked.squat.descendEntryThreshold = 0.35
+        nonBenchTweaked.squat.standLockoutThreshold = 0.02
+        nonBenchTweaked.squat.kneeBottomFlexionDegrees = 120
+        nonBenchTweaked.squat.hipBottomFlexionDegrees = 95
+        nonBenchTweaked.squat.kneeLockoutFlexionDegrees = 35
+        nonBenchTweaked.squat.hipLockoutFlexionDegrees = 40
+        nonBenchTweaked.squat.maxSideAsymmetryDegrees = 10
+        nonBenchTweaked.curl.topFlexionDegrees = 150
+        nonBenchTweaked.curl.lockoutFlexionDegrees = 5
+
+        let baselineCount = try await runBenchCycles(configuration: baseline, cycleCount: 2)
+        let tweakedCount = try await runBenchCycles(configuration: nonBenchTweaked, cycleCount: 2)
 
         #expect(baselineCount == 2)
         #expect(tweakedCount == baselineCount)
@@ -68,6 +88,38 @@ struct ExerciseRegressionContractsTests {
 
         _ = cancellable
     }
+
+    @Test func switchingProfiles_keepsSquatCurlAndBenchContractsWithDistinctConfigurations() async throws {
+        let squatConfig = makeSquatRegressionConfiguration()
+        let curlConfig = makeCurlRegressionConfiguration()
+        let benchConfig = makeBenchRegressionConfiguration()
+        let publisher = RepCounterPublisher(configuration: squatConfig, exerciseProfile: SquatExerciseProfile())
+
+        let box = OutputBox()
+        let cancellable = publisher.repCounts.sink { box.update($0) }
+
+        ingestSquatCycle(into: publisher, startSeconds: 0.0)
+        try await Task.sleep(nanoseconds: 450_000_000)
+        var snapshot = box.snapshot()
+        #expect(snapshot.profileID == "squat")
+        #expect(snapshot.count == 1)
+
+        publisher.setExerciseProfile(BicepCurlExerciseProfile(), configuration: curlConfig)
+        ingestCurlCycle(into: publisher, startSeconds: 2.0)
+        try await Task.sleep(nanoseconds: 450_000_000)
+        snapshot = box.snapshot()
+        #expect(snapshot.profileID == "bicepCurl")
+        #expect(snapshot.count == 1)
+
+        publisher.setExerciseProfile(BenchPressExerciseProfile(), configuration: benchConfig)
+        ingestBenchCycle(into: publisher, startSeconds: 4.0)
+        try await Task.sleep(nanoseconds: 450_000_000)
+        snapshot = box.snapshot()
+        #expect(snapshot.profileID == "benchPress")
+        #expect(snapshot.count == 1)
+
+        _ = cancellable
+    }
 }
 
 private final class OutputBox: @unchecked Sendable {
@@ -90,53 +142,21 @@ private final class OutputBox: @unchecked Sendable {
 }
 
 private func makeSquatRegressionConfiguration() -> RepCountingConfiguration {
-    RepCountingConfiguration(
-        armingThreshold: 0.5,
-        minPeakHeight: 0.08,
-        minValleyDepth: 0.08,
-        peakWindowSize: 5,
-        minTimeBetweenReps: 0.6,
-        minAmplitude: 0.55,
-        upThreshold: 0.20,
-        downThreshold: 0.82,
-        squatDescendEntryThreshold: 0.18,
-        squatStandLockoutThreshold: 0.10,
-        squatKneeBottomFlexionDegrees: 72,
-        squatHipBottomFlexionDegrees: 52,
-        squatKneeLockoutFlexionDegrees: 18,
-        squatHipLockoutFlexionDegrees: 20,
-        squatMaxSideAsymmetryDegrees: 25,
-        inactivityResetSeconds: 3.0,
-        activityDeltaThreshold: 0.015,
-        spikeMaxDelta: 1.0,
-        emaAlpha: 1.0
-    )
+    var config = RepCountingConfiguration.squatDefault
+    config.filters = .init(spikeMaxDelta: 1.0, emaAlpha: 1.0)
+    return config
 }
 
 private func makeCurlRegressionConfiguration() -> RepCountingConfiguration {
-    RepCountingConfiguration(
-        armingThreshold: 0.5,
-        minPeakHeight: 0.08,
-        minValleyDepth: 0.08,
-        peakWindowSize: 5,
-        minTimeBetweenReps: 0.5,
-        minAmplitude: 0.25,
-        upThreshold: 0.60,
-        downThreshold: 0.35,
-        squatDescendEntryThreshold: 0.18,
-        squatStandLockoutThreshold: 0.10,
-        squatKneeBottomFlexionDegrees: 80,
-        squatHipBottomFlexionDegrees: 60,
-        squatKneeLockoutFlexionDegrees: 18,
-        squatHipLockoutFlexionDegrees: 20,
-        squatMaxSideAsymmetryDegrees: 25,
-        curlTopFlexionDegrees: 128,
-        curlLockoutFlexionDegrees: 34,
-        inactivityResetSeconds: 3.0,
-        activityDeltaThreshold: 0.015,
-        spikeMaxDelta: 1.0,
-        emaAlpha: 1.0
-    )
+    var config = RepCountingConfiguration.bicepCurlDefault
+    config.filters = .init(spikeMaxDelta: 1.0, emaAlpha: 1.0)
+    return config
+}
+
+private func makeBenchRegressionConfiguration() -> RepCountingConfiguration {
+    var config = RepCountingConfiguration.benchPressDefault
+    config.filters = .init(spikeMaxDelta: 1.0, emaAlpha: 1.0)
+    return config
 }
 
 private func runSquatCycles(
@@ -173,6 +193,23 @@ private func runCurlCycles(
     return box.snapshot().count
 }
 
+private func runBenchCycles(
+    configuration: RepCountingConfiguration,
+    cycleCount: Int
+) async throws -> Int {
+    let publisher = RepCounterPublisher(configuration: configuration, exerciseProfile: BenchPressExerciseProfile())
+    let box = OutputBox()
+    let cancellable = publisher.repCounts.sink { box.update($0) }
+
+    for i in 0..<cycleCount {
+        ingestBenchCycle(into: publisher, startSeconds: Double(i) * 1.6)
+    }
+
+    try await Task.sleep(nanoseconds: 550_000_000)
+    _ = cancellable
+    return box.snapshot().count
+}
+
 private func ingestSquatCycle(into publisher: RepCounterPublisher, startSeconds: Double) {
     let depths: [CGFloat] = [0.00, 0.08, 0.22, 0.45, 0.68, 0.88, 0.96, 0.80, 0.56, 0.32, 0.12, 0.03]
 
@@ -199,6 +236,39 @@ private func ingestCurlCycle(into publisher: RepCounterPublisher, startSeconds: 
         let positions3D = bicepCurl3DJointPositions(
             leftElbowFlexionDegrees: flexion,
             rightElbowFlexionDegrees: max(34, flexion - 8)
+        )
+
+        publisher.ingest(PoseFrame(
+            timestamp: timestamp,
+            joints: [:],
+            positions3D: positions3D
+        ))
+    }
+}
+
+private func ingestBenchCycle(into publisher: RepCounterPublisher, startSeconds: Double) {
+    let cycle: [(elbow: CGFloat, shoulder: CGFloat)] = [
+        (10, 10),
+        (18, 12),
+        (30, 15),
+        (44, 18),
+        (48, 18),
+        (36, 22),
+        (22, 34),
+        (14, 46),
+        (12, 48),
+        (12, 28),
+        (10, 14),
+        (10, 10),
+    ]
+
+    for (i, frame) in cycle.enumerated() {
+        let timestamp = CMTime(seconds: startSeconds + Double(i) * 0.1, preferredTimescale: 600)
+        let positions3D = benchPress3DJointPositions(
+            leftElbowFlexionDegrees: frame.elbow,
+            rightElbowFlexionDegrees: max(10, frame.elbow - 4),
+            leftShoulderFlexionDegrees: frame.shoulder,
+            rightShoulderFlexionDegrees: max(10, frame.shoulder - 4)
         )
 
         publisher.ingest(PoseFrame(
@@ -317,6 +387,78 @@ private func bicepCurl3DJointPositions(
         .rightShoulder: right.shoulder,
         .rightElbow: right.elbow,
         .rightWrist: right.wrist,
+        .spine: SIMD3(x: 0, y: 0.20, z: cameraZ),
+        .root: SIMD3(x: 0, y: -0.05, z: cameraZ),
+    ]
+}
+
+private func benchPress3DJointPositions(
+    leftElbowFlexionDegrees: CGFloat,
+    rightElbowFlexionDegrees: CGFloat,
+    leftShoulderFlexionDegrees: CGFloat,
+    rightShoulderFlexionDegrees: CGFloat,
+    cameraZ: Float = 2.0
+) -> [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>] {
+    func radians(_ degrees: CGFloat) -> CGFloat {
+        degrees * .pi / 180
+    }
+
+    func side(
+        xOffset: Float,
+        elbowFlexionDegrees: CGFloat,
+        shoulderFlexionDegrees: CGFloat,
+        inwardDirection: CGFloat
+    ) -> (shoulder: SIMD3<Float>, elbow: SIMD3<Float>, wrist: SIMD3<Float>, hip: SIMD3<Float>) {
+        let upperArmLength: CGFloat = 0.30
+        let forearmLength: CGFloat = 0.28
+
+        let shoulder = CGPoint(x: 0, y: 0.35)
+        let hip = CGPoint(x: 0, y: -0.10)
+
+        let shoulderFlexion = max(0, min(150, shoulderFlexionDegrees))
+        let upperArmAngle = radians(-90 + inwardDirection * shoulderFlexion)
+        let elbow = CGPoint(
+            x: shoulder.x + cos(upperArmAngle) * upperArmLength,
+            y: shoulder.y + sin(upperArmAngle) * upperArmLength
+        )
+
+        let elbowFlexion = max(0, min(150, elbowFlexionDegrees))
+        let forearmAngle = upperArmAngle + inwardDirection * radians(elbowFlexion)
+        let wrist = CGPoint(
+            x: elbow.x + cos(forearmAngle) * forearmLength,
+            y: elbow.y + sin(forearmAngle) * forearmLength
+        )
+
+        return (
+            shoulder: SIMD3(x: xOffset + Float(shoulder.x), y: Float(shoulder.y), z: cameraZ),
+            elbow: SIMD3(x: xOffset + Float(elbow.x), y: Float(elbow.y), z: cameraZ),
+            wrist: SIMD3(x: xOffset + Float(wrist.x), y: Float(wrist.y), z: cameraZ),
+            hip: SIMD3(x: xOffset + Float(hip.x), y: Float(hip.y), z: cameraZ)
+        )
+    }
+
+    let left = side(
+        xOffset: -0.24,
+        elbowFlexionDegrees: leftElbowFlexionDegrees,
+        shoulderFlexionDegrees: leftShoulderFlexionDegrees,
+        inwardDirection: 1
+    )
+    let right = side(
+        xOffset: 0.24,
+        elbowFlexionDegrees: rightElbowFlexionDegrees,
+        shoulderFlexionDegrees: rightShoulderFlexionDegrees,
+        inwardDirection: -1
+    )
+
+    return [
+        .leftShoulder: left.shoulder,
+        .leftElbow: left.elbow,
+        .leftWrist: left.wrist,
+        .leftHip: left.hip,
+        .rightShoulder: right.shoulder,
+        .rightElbow: right.elbow,
+        .rightWrist: right.wrist,
+        .rightHip: right.hip,
         .spine: SIMD3(x: 0, y: 0.20, z: cameraZ),
         .root: SIMD3(x: 0, y: -0.05, z: cameraZ),
     ]

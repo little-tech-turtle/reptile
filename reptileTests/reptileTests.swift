@@ -13,35 +13,51 @@ struct ReptileTests {
         #expect(ExerciseCatalog.bicepCurl.id == "bicepCurl")
         #expect(ExerciseCatalog.bicepCurl.repSound == nil)
 
-        #expect(ExerciseCatalog.all.count == 2)
+        #expect(ExerciseCatalog.benchPress.id == "benchPress")
+        #expect(ExerciseCatalog.benchPress.repSound == nil)
+
+        #expect(ExerciseCatalog.all.count == 3)
     }
 
     @Test func exerciseCatalog_resolvesByID() {
         #expect(ExerciseCatalog.definition(for: "squat")?.id == "squat")
         #expect(ExerciseCatalog.definition(for: "bicepCurl")?.id == "bicepCurl")
-        #expect(ExerciseCatalog.definition(for: "benchPress") == nil)
+        #expect(ExerciseCatalog.definition(for: "benchPress")?.id == "benchPress")
         #expect(ExerciseCatalog.definition(for: "unknown") == nil)
     }
 
     @Test func defaultRepTuning_usesExpectedCurlThresholds() {
         let curl = LiveCameraCoordinator.defaultRepTuning(for: "bicepCurl")
 
-        #expect(curl.upThreshold == 0.60)
-        #expect(curl.downThreshold == 0.35)
-        #expect(curl.minAmplitude == 0.25)
-        #expect(curl.minTimeBetweenReps == 0.5)
-        #expect(curl.curlTopFlexionDegrees == 128)
-        #expect(curl.curlLockoutFlexionDegrees == 34)
+        #expect(curl.gates.upThreshold == 0.60)
+        #expect(curl.gates.downThreshold == 0.35)
+        #expect(curl.gates.minAmplitude == 0.25)
+        #expect(curl.gates.minTimeBetweenReps == 0.5)
+        #expect(curl.curl.topFlexionDegrees == 128)
+        #expect(curl.curl.lockoutFlexionDegrees == 34)
     }
 
     @Test func defaultRepTuning_usesExpectedSquatThresholds() {
         let squat = LiveCameraCoordinator.defaultRepTuning(for: "squat")
 
-        #expect(squat.downThreshold == 0.82)
-        #expect(squat.squatDescendEntryThreshold == 0.18)
-        #expect(squat.squatStandLockoutThreshold == 0.10)
-        #expect(squat.squatKneeBottomFlexionDegrees == 72)
-        #expect(squat.squatHipBottomFlexionDegrees == 52)
+        #expect(squat.gates.downThreshold == 0.82)
+        #expect(squat.squat.descendEntryThreshold == 0.18)
+        #expect(squat.squat.standLockoutThreshold == 0.10)
+        #expect(squat.squat.kneeBottomFlexionDegrees == 72)
+        #expect(squat.squat.hipBottomFlexionDegrees == 52)
+    }
+
+    @Test func defaultRepTuning_usesExpectedBenchThresholds() {
+        let bench = LiveCameraCoordinator.defaultRepTuning(for: "benchPress")
+
+        #expect(bench.gates.upThreshold == 0.60)
+        #expect(bench.gates.downThreshold == 0.30)
+        #expect(bench.gates.minAmplitude == 0.20)
+        #expect(bench.gates.minTimeBetweenReps == 0.5)
+        #expect(bench.bench.bottomElbowFlexionDegrees == 45)
+        #expect(bench.bench.bottomShoulderFlexionDegrees == 45)
+        #expect(bench.bench.lockoutElbowFlexionDegrees == 12)
+        #expect(bench.bench.lockoutShoulderFlexionDegrees == 12)
     }
 
     @Test func squatTuningControls_areLeanAndTransparent() {
@@ -67,6 +83,20 @@ struct ReptileTests {
             "curl-lockout-flexion",
             "curl-top-gate",
             "curl-lockout-gate",
+        ])
+
+        #expect(controls.allSatisfy { !$0.hint.isEmpty })
+    }
+
+    @Test func benchTuningControls_areLeanAndTransparent() {
+        let controls = ExerciseCatalog.benchPress.tuningControls
+
+        #expect(controls.count == 4)
+        #expect(controls.map(\.id) == [
+            "bench-bottom-elbow",
+            "bench-lockout-elbow",
+            "bench-bottom-shoulder",
+            "bench-lockout-shoulder",
         ])
 
         #expect(controls.allSatisfy { !$0.hint.isEmpty })

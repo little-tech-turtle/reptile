@@ -14,87 +14,191 @@ public enum DetectionQuality: Sendable {
 }
 
 public struct RepCountingConfiguration: Sendable {
-    public var armingThreshold: CGFloat
-    public var peakHistoryCapacity: Int
-    public var minPeakHeight: CGFloat
-    public var minValleyDepth: CGFloat
-    public var peakWindowSize: Int
-    public var minTimeBetweenReps: Double
-    public var minAmplitude: CGFloat
-    public var upThreshold: CGFloat
-    public var downThreshold: CGFloat
-    public var squatDescendEntryThreshold: CGFloat
-    public var squatStandLockoutThreshold: CGFloat
-    public var squatKneeBottomFlexionDegrees: CGFloat
-    public var squatHipBottomFlexionDegrees: CGFloat
-    public var squatKneeLockoutFlexionDegrees: CGFloat
-    public var squatHipLockoutFlexionDegrees: CGFloat
-    public var squatMaxSideAsymmetryDegrees: CGFloat
-    public var curlTopFlexionDegrees: CGFloat
-    public var curlLockoutFlexionDegrees: CGFloat
-    public var inactivityResetSeconds: Double
-    public var activityDeltaThreshold: CGFloat
-    public var spikeMaxDelta: CGFloat
-    public var emaAlpha: CGFloat
+    public struct Common: Sendable {
+        public var armingThreshold: CGFloat
+        public var inactivityResetSeconds: Double
+        public var activityDeltaThreshold: CGFloat
+
+        public init(
+            armingThreshold: CGFloat = 0.5,
+            inactivityResetSeconds: Double = 3.0,
+            activityDeltaThreshold: CGFloat = 0.015
+        ) {
+            self.armingThreshold = armingThreshold
+            self.inactivityResetSeconds = inactivityResetSeconds
+            self.activityDeltaThreshold = activityDeltaThreshold
+        }
+    }
+
+    public struct PeakDetection: Sendable {
+        public var historyCapacity: Int
+        public var minPeakHeight: CGFloat
+        public var minValleyDepth: CGFloat
+        public var windowSize: Int
+
+        public init(
+            historyCapacity: Int = 90,
+            minPeakHeight: CGFloat = 0.08,
+            minValleyDepth: CGFloat = 0.08,
+            windowSize: Int = 5
+        ) {
+            self.historyCapacity = historyCapacity
+            self.minPeakHeight = minPeakHeight
+            self.minValleyDepth = minValleyDepth
+            self.windowSize = windowSize
+        }
+    }
+
+    public struct RepGates: Sendable {
+        public var minTimeBetweenReps: Double
+        public var minAmplitude: CGFloat
+        public var upThreshold: CGFloat
+        public var downThreshold: CGFloat
+
+        public init(
+            minTimeBetweenReps: Double = 0.6,
+            minAmplitude: CGFloat = 0.18,
+            upThreshold: CGFloat = 0.20,
+            downThreshold: CGFloat = 0.92
+        ) {
+            self.minTimeBetweenReps = minTimeBetweenReps
+            self.minAmplitude = minAmplitude
+            self.upThreshold = upThreshold
+            self.downThreshold = downThreshold
+        }
+    }
+
+    public struct FilterTuning: Sendable {
+        public var spikeMaxDelta: CGFloat
+        public var emaAlpha: CGFloat
+
+        public init(spikeMaxDelta: CGFloat = 0.25, emaAlpha: CGFloat = 0.3) {
+            self.spikeMaxDelta = spikeMaxDelta
+            self.emaAlpha = emaAlpha
+        }
+    }
+
+    public struct SquatTuning: Sendable {
+        public var descendEntryThreshold: CGFloat
+        public var standLockoutThreshold: CGFloat
+        public var kneeBottomFlexionDegrees: CGFloat
+        public var hipBottomFlexionDegrees: CGFloat
+        public var kneeLockoutFlexionDegrees: CGFloat
+        public var hipLockoutFlexionDegrees: CGFloat
+        public var maxSideAsymmetryDegrees: CGFloat
+
+        public init(
+            descendEntryThreshold: CGFloat = 0.18,
+            standLockoutThreshold: CGFloat = 0.10,
+            kneeBottomFlexionDegrees: CGFloat = 80,
+            hipBottomFlexionDegrees: CGFloat = 60,
+            kneeLockoutFlexionDegrees: CGFloat = 18,
+            hipLockoutFlexionDegrees: CGFloat = 20,
+            maxSideAsymmetryDegrees: CGFloat = 25
+        ) {
+            self.descendEntryThreshold = descendEntryThreshold
+            self.standLockoutThreshold = standLockoutThreshold
+            self.kneeBottomFlexionDegrees = kneeBottomFlexionDegrees
+            self.hipBottomFlexionDegrees = hipBottomFlexionDegrees
+            self.kneeLockoutFlexionDegrees = kneeLockoutFlexionDegrees
+            self.hipLockoutFlexionDegrees = hipLockoutFlexionDegrees
+            self.maxSideAsymmetryDegrees = maxSideAsymmetryDegrees
+        }
+    }
+
+    public struct CurlTuning: Sendable {
+        public var topFlexionDegrees: CGFloat
+        public var lockoutFlexionDegrees: CGFloat
+
+        public init(topFlexionDegrees: CGFloat = 95, lockoutFlexionDegrees: CGFloat = 18) {
+            self.topFlexionDegrees = topFlexionDegrees
+            self.lockoutFlexionDegrees = lockoutFlexionDegrees
+        }
+    }
+
+    public struct BenchTuning: Sendable {
+        public var bottomElbowFlexionDegrees: CGFloat
+        public var bottomShoulderFlexionDegrees: CGFloat
+        public var lockoutElbowFlexionDegrees: CGFloat
+        public var lockoutShoulderFlexionDegrees: CGFloat
+
+        public init(
+            bottomElbowFlexionDegrees: CGFloat = 45,
+            bottomShoulderFlexionDegrees: CGFloat = 45,
+            lockoutElbowFlexionDegrees: CGFloat = 12,
+            lockoutShoulderFlexionDegrees: CGFloat = 12
+        ) {
+            self.bottomElbowFlexionDegrees = bottomElbowFlexionDegrees
+            self.bottomShoulderFlexionDegrees = bottomShoulderFlexionDegrees
+            self.lockoutElbowFlexionDegrees = lockoutElbowFlexionDegrees
+            self.lockoutShoulderFlexionDegrees = lockoutShoulderFlexionDegrees
+        }
+    }
+
+    public var common: Common
+    public var peakDetection: PeakDetection
+    public var gates: RepGates
+    public var filters: FilterTuning
+    public var squat: SquatTuning
+    public var curl: CurlTuning
+    public var bench: BenchTuning
 
     public init(
-        armingThreshold: CGFloat = 0.5,
-        peakHistoryCapacity: Int = 90,
-        minPeakHeight: CGFloat = 0.08,
-        minValleyDepth: CGFloat = 0.08,
-        peakWindowSize: Int = 5,
-        minTimeBetweenReps: Double = 0.6,
-        minAmplitude: CGFloat = 0.18,
-        upThreshold: CGFloat = 0.20,
-        downThreshold: CGFloat = 0.92,
-        squatDescendEntryThreshold: CGFloat = 0.18,
-        squatStandLockoutThreshold: CGFloat = 0.10,
-        squatKneeBottomFlexionDegrees: CGFloat = 80,
-        squatHipBottomFlexionDegrees: CGFloat = 60,
-        squatKneeLockoutFlexionDegrees: CGFloat = 18,
-        squatHipLockoutFlexionDegrees: CGFloat = 20,
-        squatMaxSideAsymmetryDegrees: CGFloat = 25,
-        curlTopFlexionDegrees: CGFloat = 95,
-        curlLockoutFlexionDegrees: CGFloat = 18,
-        inactivityResetSeconds: Double = 3.0,
-        activityDeltaThreshold: CGFloat = 0.015,
-        spikeMaxDelta: CGFloat = 0.25,
-        emaAlpha: CGFloat = 0.3
+        common: Common = .init(),
+        peakDetection: PeakDetection = .init(),
+        gates: RepGates = .init(),
+        filters: FilterTuning = .init(),
+        squat: SquatTuning = .init(),
+        curl: CurlTuning = .init(),
+        bench: BenchTuning = .init()
     ) {
-        self.armingThreshold = armingThreshold
-        self.peakHistoryCapacity = peakHistoryCapacity
-        self.minPeakHeight = minPeakHeight
-        self.minValleyDepth = minValleyDepth
-        self.peakWindowSize = peakWindowSize
-        self.minTimeBetweenReps = minTimeBetweenReps
-        self.minAmplitude = minAmplitude
-        self.upThreshold = upThreshold
-        self.downThreshold = downThreshold
-        self.squatDescendEntryThreshold = squatDescendEntryThreshold
-        self.squatStandLockoutThreshold = squatStandLockoutThreshold
-        self.squatKneeBottomFlexionDegrees = squatKneeBottomFlexionDegrees
-        self.squatHipBottomFlexionDegrees = squatHipBottomFlexionDegrees
-        self.squatKneeLockoutFlexionDegrees = squatKneeLockoutFlexionDegrees
-        self.squatHipLockoutFlexionDegrees = squatHipLockoutFlexionDegrees
-        self.squatMaxSideAsymmetryDegrees = squatMaxSideAsymmetryDegrees
-        self.curlTopFlexionDegrees = curlTopFlexionDegrees
-        self.curlLockoutFlexionDegrees = curlLockoutFlexionDegrees
-        self.inactivityResetSeconds = inactivityResetSeconds
-        self.activityDeltaThreshold = activityDeltaThreshold
-        self.spikeMaxDelta = spikeMaxDelta
-        self.emaAlpha = emaAlpha
+        self.common = common
+        self.peakDetection = peakDetection
+        self.gates = gates
+        self.filters = filters
+        self.squat = squat
+        self.curl = curl
+        self.bench = bench
     }
+
+    public static let squatDefault = RepCountingConfiguration(
+        gates: .init(minTimeBetweenReps: 0.6, minAmplitude: 0.55, upThreshold: 0.20, downThreshold: 0.82),
+        squat: .init(
+            descendEntryThreshold: 0.18,
+            standLockoutThreshold: 0.10,
+            kneeBottomFlexionDegrees: 72,
+            hipBottomFlexionDegrees: 52,
+            kneeLockoutFlexionDegrees: 18,
+            hipLockoutFlexionDegrees: 20,
+            maxSideAsymmetryDegrees: 25
+        )
+    )
+
+    public static let bicepCurlDefault = RepCountingConfiguration(
+        gates: .init(minTimeBetweenReps: 0.5, minAmplitude: 0.25, upThreshold: 0.60, downThreshold: 0.35),
+        curl: .init(topFlexionDegrees: 128, lockoutFlexionDegrees: 34)
+    )
+
+    public static let benchPressDefault = RepCountingConfiguration(
+        gates: .init(minTimeBetweenReps: 0.5, minAmplitude: 0.20, upThreshold: 0.60, downThreshold: 0.30),
+        bench: .init(
+            bottomElbowFlexionDegrees: 45,
+            bottomShoulderFlexionDegrees: 45,
+            lockoutElbowFlexionDegrees: 12,
+            lockoutShoulderFlexionDegrees: 12
+        )
+    )
 
     var repCounterTuning: RepCounterTuning {
         RepCounterTuning(
-            minTimeBetweenReps: minTimeBetweenReps,
-            minAmplitude: minAmplitude,
-            upThreshold: upThreshold,
-            downThreshold: downThreshold,
-            inactivityResetSeconds: inactivityResetSeconds,
-            activityDeltaThreshold: activityDeltaThreshold,
-            squatDescendEntryThreshold: squatDescendEntryThreshold,
-            squatStandLockoutThreshold: squatStandLockoutThreshold
+            minTimeBetweenReps: gates.minTimeBetweenReps,
+            minAmplitude: gates.minAmplitude,
+            upThreshold: gates.upThreshold,
+            downThreshold: gates.downThreshold,
+            inactivityResetSeconds: common.inactivityResetSeconds,
+            activityDeltaThreshold: common.activityDeltaThreshold,
+            squatDescendEntryThreshold: squat.descendEntryThreshold,
+            squatStandLockoutThreshold: squat.standLockoutThreshold
         )
     }
 }
@@ -196,7 +300,7 @@ public final class RepCounterPublisher: @unchecked Sendable {
             peakDetector: exerciseProfile.makePeakDetector(configuration: configuration),
             repCounter: exerciseProfile.makeRepCounter(configuration: configuration),
             metricFilters: exerciseProfile.makeMetricFilters(configuration: configuration),
-            armingThreshold: configuration.armingThreshold,
+            armingThreshold: configuration.common.armingThreshold,
             exerciseProfileID: exerciseProfile.id,
             metricCalculatorFactory: { exerciseProfile.makeMetricCalculator(configuration: $0) },
             peakDetectorFactory: { exerciseProfile.makePeakDetector(configuration: $0) },
@@ -213,7 +317,7 @@ public final class RepCounterPublisher: @unchecked Sendable {
             self.metricCalculator = self.metricCalculatorFactory(configuration)
             self.peakDetector = self.peakDetectorFactory(configuration)
             self.metricFilters = self.metricFilterFactory(configuration)
-            self.armingThreshold = configuration.armingThreshold
+            self.armingThreshold = configuration.common.armingThreshold
             self.repCounter.updateTuning(configuration.repCounterTuning)
             self.metricWindow.removeAll()
         }
@@ -237,7 +341,7 @@ public final class RepCounterPublisher: @unchecked Sendable {
             self.peakDetector = self.peakDetectorFactory(configuration)
             self.repCounter = self.repCounterFactory(configuration)
             self.metricFilters = self.metricFilterFactory(configuration)
-            self.armingThreshold = configuration.armingThreshold
+            self.armingThreshold = configuration.common.armingThreshold
             self.metricWindow.removeAll()
         }
     }
@@ -355,30 +459,30 @@ public final class RepCounterPublisher: @unchecked Sendable {
 
     private static func makePeakDetector(_ configuration: RepCountingConfiguration) -> LocalExtremaPeakDetector {
         LocalExtremaPeakDetector(
-            historyCapacity: configuration.peakHistoryCapacity,
-            minPeakHeight: configuration.minPeakHeight,
-            minValleyDepth: configuration.minValleyDepth,
-            windowSize: configuration.peakWindowSize
+            historyCapacity: configuration.peakDetection.historyCapacity,
+            minPeakHeight: configuration.peakDetection.minPeakHeight,
+            minValleyDepth: configuration.peakDetection.minValleyDepth,
+            windowSize: configuration.peakDetection.windowSize
         )
     }
 
     private static func makeRepCounter(_ configuration: RepCountingConfiguration) -> SquatPhaseRepCounter {
         SquatPhaseRepCounter(
-            minTimeBetweenReps: configuration.minTimeBetweenReps,
-            minAmplitude: configuration.minAmplitude,
-            upThreshold: configuration.upThreshold,
-            downThreshold: configuration.downThreshold,
-            inactivityResetSeconds: configuration.inactivityResetSeconds,
-            activityDeltaThreshold: configuration.activityDeltaThreshold,
-            descendEntryThreshold: configuration.squatDescendEntryThreshold,
-            standLockoutThreshold: configuration.squatStandLockoutThreshold
+            minTimeBetweenReps: configuration.gates.minTimeBetweenReps,
+            minAmplitude: configuration.gates.minAmplitude,
+            upThreshold: configuration.gates.upThreshold,
+            downThreshold: configuration.gates.downThreshold,
+            inactivityResetSeconds: configuration.common.inactivityResetSeconds,
+            activityDeltaThreshold: configuration.common.activityDeltaThreshold,
+            descendEntryThreshold: configuration.squat.descendEntryThreshold,
+            standLockoutThreshold: configuration.squat.standLockoutThreshold
         )
     }
 
     private static func makeMetricFilters(_ configuration: RepCountingConfiguration) -> [any MetricFilter] {
         [
-            SpikeRejectionFilter(maxDelta: configuration.spikeMaxDelta),
-            EMAMetricFilter(alpha: configuration.emaAlpha),
+            SpikeRejectionFilter(maxDelta: configuration.filters.spikeMaxDelta),
+            EMAMetricFilter(alpha: configuration.filters.emaAlpha),
         ]
     }
 }

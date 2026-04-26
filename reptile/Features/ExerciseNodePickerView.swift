@@ -87,7 +87,7 @@ final class ExerciseNodePickerView: UIView {
     }
 
     private func setupGestures() {
-        holdGesture.minimumPressDuration = 0.22
+        holdGesture.minimumPressDuration = 0.12
         holdGesture.allowableMovement = 180
         holdGesture.addTarget(self, action: #selector(handleHold(_:)))
         triggerButton.addGestureRecognizer(holdGesture)
@@ -179,7 +179,7 @@ final class ExerciseNodePickerView: UIView {
         }
 
         if animated {
-            UIView.animate(withDuration: 0.16, delay: 0, options: [.curveEaseInOut], animations: animations) { _ in
+            UIView.animate(withDuration: 0.12, delay: 0, options: [.curveEaseInOut], animations: animations) { _ in
                 if !expanded {
                     for exercise in self.exercises {
                         self.nodeButtons[exercise.id]?.isHidden = true
@@ -217,6 +217,9 @@ final class ExerciseNodePickerView: UIView {
 
     private func selectExercise(_ exerciseID: String, notify: Bool) {
         guard exercises.contains(where: { $0.id == exerciseID }) else { return }
+        if selectedExerciseID == exerciseID {
+            return
+        }
         selectedExerciseID = exerciseID
 
         let selectedTitle = exercises.first(where: { $0.id == exerciseID })?.title ?? "Exercise"

@@ -255,6 +255,12 @@ final class LiveCameraViewController: UIViewController {
 
     private func applyExerciseSelection(_ exerciseID: String, persistSelection: Bool) {
         guard let exerciseDefinition = LiveCameraCoordinator.definition(for: exerciseID) else { return }
+        if selectedExerciseID == exerciseDefinition.id {
+            if persistSelection {
+                saveExerciseID(exerciseDefinition.id)
+            }
+            return
+        }
 
         selectedExerciseID = exerciseDefinition.id
         let tuning = loadSavedRepTuning(for: exerciseDefinition.id)
@@ -356,27 +362,32 @@ final class LiveCameraViewController: UIViewController {
 
     private func saveRepTuning(_ configuration: RepCountingConfiguration, for exerciseID: String) {
         let values: [String: Double] = [
-            "armingThreshold": Double(configuration.armingThreshold),
-            "minPeakHeight": Double(configuration.minPeakHeight),
-            "minValleyDepth": Double(configuration.minValleyDepth),
-            "peakWindowSize": Double(configuration.peakWindowSize),
-            "minTimeBetweenReps": configuration.minTimeBetweenReps,
-            "minAmplitude": Double(configuration.minAmplitude),
-            "upThreshold": Double(configuration.upThreshold),
-            "downThreshold": Double(configuration.downThreshold),
-            "squatDescendEntryThreshold": Double(configuration.squatDescendEntryThreshold),
-            "squatStandLockoutThreshold": Double(configuration.squatStandLockoutThreshold),
-            "squatKneeBottomFlexionDegrees": Double(configuration.squatKneeBottomFlexionDegrees),
-            "squatHipBottomFlexionDegrees": Double(configuration.squatHipBottomFlexionDegrees),
-            "squatKneeLockoutFlexionDegrees": Double(configuration.squatKneeLockoutFlexionDegrees),
-            "squatHipLockoutFlexionDegrees": Double(configuration.squatHipLockoutFlexionDegrees),
-            "squatMaxSideAsymmetryDegrees": Double(configuration.squatMaxSideAsymmetryDegrees),
-            "curlTopFlexionDegrees": Double(configuration.curlTopFlexionDegrees),
-            "curlLockoutFlexionDegrees": Double(configuration.curlLockoutFlexionDegrees),
-            "inactivityResetSeconds": configuration.inactivityResetSeconds,
-            "activityDeltaThreshold": Double(configuration.activityDeltaThreshold),
-            "spikeMaxDelta": Double(configuration.spikeMaxDelta),
-            "emaAlpha": Double(configuration.emaAlpha),
+            "armingThreshold": Double(configuration.common.armingThreshold),
+            "inactivityResetSeconds": configuration.common.inactivityResetSeconds,
+            "activityDeltaThreshold": Double(configuration.common.activityDeltaThreshold),
+            "peakHistoryCapacity": Double(configuration.peakDetection.historyCapacity),
+            "minPeakHeight": Double(configuration.peakDetection.minPeakHeight),
+            "minValleyDepth": Double(configuration.peakDetection.minValleyDepth),
+            "peakWindowSize": Double(configuration.peakDetection.windowSize),
+            "minTimeBetweenReps": configuration.gates.minTimeBetweenReps,
+            "minAmplitude": Double(configuration.gates.minAmplitude),
+            "upThreshold": Double(configuration.gates.upThreshold),
+            "downThreshold": Double(configuration.gates.downThreshold),
+            "squatDescendEntryThreshold": Double(configuration.squat.descendEntryThreshold),
+            "squatStandLockoutThreshold": Double(configuration.squat.standLockoutThreshold),
+            "squatKneeBottomFlexionDegrees": Double(configuration.squat.kneeBottomFlexionDegrees),
+            "squatHipBottomFlexionDegrees": Double(configuration.squat.hipBottomFlexionDegrees),
+            "squatKneeLockoutFlexionDegrees": Double(configuration.squat.kneeLockoutFlexionDegrees),
+            "squatHipLockoutFlexionDegrees": Double(configuration.squat.hipLockoutFlexionDegrees),
+            "squatMaxSideAsymmetryDegrees": Double(configuration.squat.maxSideAsymmetryDegrees),
+            "curlTopFlexionDegrees": Double(configuration.curl.topFlexionDegrees),
+            "curlLockoutFlexionDegrees": Double(configuration.curl.lockoutFlexionDegrees),
+            "benchBottomElbowFlexionDegrees": Double(configuration.bench.bottomElbowFlexionDegrees),
+            "benchBottomShoulderFlexionDegrees": Double(configuration.bench.bottomShoulderFlexionDegrees),
+            "benchLockoutElbowFlexionDegrees": Double(configuration.bench.lockoutElbowFlexionDegrees),
+            "benchLockoutShoulderFlexionDegrees": Double(configuration.bench.lockoutShoulderFlexionDegrees),
+            "spikeMaxDelta": Double(configuration.filters.spikeMaxDelta),
+            "emaAlpha": Double(configuration.filters.emaAlpha),
         ]
         UserDefaults.standard.set(values, forKey: tuningStorageKey(for: exerciseID))
     }
@@ -432,57 +443,90 @@ final class LiveCameraViewController: UIViewController {
         }
 
         let defaults = LiveCameraCoordinator.defaultRepTuning(for: exerciseID)
+        let peakHistoryCapacity =
+            (values["peakHistoryCapacity"] as? Double)
+            ?? Double(defaults.peakDetection.historyCapacity)
         let squatDescendEntryThreshold =
             (values["squatDescendEntryThreshold"] as? Double)
-            ?? Double(defaults.squatDescendEntryThreshold)
+            ?? Double(defaults.squat.descendEntryThreshold)
         let squatStandLockoutThreshold =
             (values["squatStandLockoutThreshold"] as? Double)
-            ?? Double(defaults.squatStandLockoutThreshold)
+            ?? Double(defaults.squat.standLockoutThreshold)
         let squatKneeBottomFlexionDegrees =
             (values["squatKneeBottomFlexionDegrees"] as? Double)
-            ?? Double(defaults.squatKneeBottomFlexionDegrees)
+            ?? Double(defaults.squat.kneeBottomFlexionDegrees)
         let squatHipBottomFlexionDegrees =
             (values["squatHipBottomFlexionDegrees"] as? Double)
-            ?? Double(defaults.squatHipBottomFlexionDegrees)
+            ?? Double(defaults.squat.hipBottomFlexionDegrees)
         let squatKneeLockoutFlexionDegrees =
             (values["squatKneeLockoutFlexionDegrees"] as? Double)
-            ?? Double(defaults.squatKneeLockoutFlexionDegrees)
+            ?? Double(defaults.squat.kneeLockoutFlexionDegrees)
         let squatHipLockoutFlexionDegrees =
             (values["squatHipLockoutFlexionDegrees"] as? Double)
-            ?? Double(defaults.squatHipLockoutFlexionDegrees)
+            ?? Double(defaults.squat.hipLockoutFlexionDegrees)
         let squatMaxSideAsymmetryDegrees =
             (values["squatMaxSideAsymmetryDegrees"] as? Double)
-            ?? Double(defaults.squatMaxSideAsymmetryDegrees)
+            ?? Double(defaults.squat.maxSideAsymmetryDegrees)
         let curlTopFlexionDegrees =
             (values["curlTopFlexionDegrees"] as? Double)
-            ?? Double(defaults.curlTopFlexionDegrees)
+            ?? Double(defaults.curl.topFlexionDegrees)
         let curlLockoutFlexionDegrees =
             (values["curlLockoutFlexionDegrees"] as? Double)
-            ?? Double(defaults.curlLockoutFlexionDegrees)
+            ?? Double(defaults.curl.lockoutFlexionDegrees)
+        let benchBottomElbowFlexionDegrees =
+            (values["benchBottomElbowFlexionDegrees"] as? Double)
+            ?? Double(defaults.bench.bottomElbowFlexionDegrees)
+        let benchBottomShoulderFlexionDegrees =
+            (values["benchBottomShoulderFlexionDegrees"] as? Double)
+            ?? Double(defaults.bench.bottomShoulderFlexionDegrees)
+        let benchLockoutElbowFlexionDegrees =
+            (values["benchLockoutElbowFlexionDegrees"] as? Double)
+            ?? Double(defaults.bench.lockoutElbowFlexionDegrees)
+        let benchLockoutShoulderFlexionDegrees =
+            (values["benchLockoutShoulderFlexionDegrees"] as? Double)
+            ?? Double(defaults.bench.lockoutShoulderFlexionDegrees)
 
         return RepCountingConfiguration(
-            armingThreshold: CGFloat(armingThreshold),
-            peakHistoryCapacity: defaults.peakHistoryCapacity,
-            minPeakHeight: CGFloat(minPeakHeight),
-            minValleyDepth: CGFloat(minValleyDepth),
-            peakWindowSize: Int(peakWindowSize),
-            minTimeBetweenReps: minTimeBetweenReps,
-            minAmplitude: CGFloat(minAmplitude),
-            upThreshold: CGFloat(upThreshold),
-            downThreshold: CGFloat(downThreshold),
-            squatDescendEntryThreshold: CGFloat(squatDescendEntryThreshold),
-            squatStandLockoutThreshold: CGFloat(squatStandLockoutThreshold),
-            squatKneeBottomFlexionDegrees: CGFloat(squatKneeBottomFlexionDegrees),
-            squatHipBottomFlexionDegrees: CGFloat(squatHipBottomFlexionDegrees),
-            squatKneeLockoutFlexionDegrees: CGFloat(squatKneeLockoutFlexionDegrees),
-            squatHipLockoutFlexionDegrees: CGFloat(squatHipLockoutFlexionDegrees),
-            squatMaxSideAsymmetryDegrees: CGFloat(squatMaxSideAsymmetryDegrees),
-            curlTopFlexionDegrees: CGFloat(curlTopFlexionDegrees),
-            curlLockoutFlexionDegrees: CGFloat(curlLockoutFlexionDegrees),
-            inactivityResetSeconds: inactivityResetSeconds,
-            activityDeltaThreshold: CGFloat(activityDeltaThreshold),
-            spikeMaxDelta: CGFloat(spikeMaxDelta),
-            emaAlpha: CGFloat(emaAlpha)
+            common: .init(
+                armingThreshold: CGFloat(armingThreshold),
+                inactivityResetSeconds: inactivityResetSeconds,
+                activityDeltaThreshold: CGFloat(activityDeltaThreshold)
+            ),
+            peakDetection: .init(
+                historyCapacity: Int(peakHistoryCapacity),
+                minPeakHeight: CGFloat(minPeakHeight),
+                minValleyDepth: CGFloat(minValleyDepth),
+                windowSize: Int(peakWindowSize)
+            ),
+            gates: .init(
+                minTimeBetweenReps: minTimeBetweenReps,
+                minAmplitude: CGFloat(minAmplitude),
+                upThreshold: CGFloat(upThreshold),
+                downThreshold: CGFloat(downThreshold)
+            ),
+            filters: .init(
+                spikeMaxDelta: CGFloat(spikeMaxDelta),
+                emaAlpha: CGFloat(emaAlpha)
+            ),
+            squat: .init(
+                descendEntryThreshold: CGFloat(squatDescendEntryThreshold),
+                standLockoutThreshold: CGFloat(squatStandLockoutThreshold),
+                kneeBottomFlexionDegrees: CGFloat(squatKneeBottomFlexionDegrees),
+                hipBottomFlexionDegrees: CGFloat(squatHipBottomFlexionDegrees),
+                kneeLockoutFlexionDegrees: CGFloat(squatKneeLockoutFlexionDegrees),
+                hipLockoutFlexionDegrees: CGFloat(squatHipLockoutFlexionDegrees),
+                maxSideAsymmetryDegrees: CGFloat(squatMaxSideAsymmetryDegrees)
+            ),
+            curl: .init(
+                topFlexionDegrees: CGFloat(curlTopFlexionDegrees),
+                lockoutFlexionDegrees: CGFloat(curlLockoutFlexionDegrees)
+            ),
+            bench: .init(
+                bottomElbowFlexionDegrees: CGFloat(benchBottomElbowFlexionDegrees),
+                bottomShoulderFlexionDegrees: CGFloat(benchBottomShoulderFlexionDegrees),
+                lockoutElbowFlexionDegrees: CGFloat(benchLockoutElbowFlexionDegrees),
+                lockoutShoulderFlexionDegrees: CGFloat(benchLockoutShoulderFlexionDegrees)
+            )
         )
     }
 }
