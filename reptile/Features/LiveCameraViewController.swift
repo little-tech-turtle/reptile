@@ -18,7 +18,7 @@ final class LiveCameraViewController: UIViewController {
     private let previewView = CameraPreviewView()
     private let repCountLabel = UILabel()
     private let statusLabel = UILabel()
-    private let exerciseSelector = UISegmentedControl(items: LiveCameraCoordinator.availableExercises.map(\.title))
+    private let exercisePicker = ExerciseNodePickerView()
     private let cameraToggleButton = UIButton(type: .system)
     private let overlayView = SkeletonOverlayView()
     private let debugView = DebugOverlayView()
@@ -49,7 +49,7 @@ final class LiveCameraViewController: UIViewController {
         setupOverlayView()
         setupRepCountLabel()
         setupStatusLabel()
-        setupExerciseSelector()
+        setupExercisePicker()
         setupCameraToggleButton()
         setupDebugView()
         setupTuningPanel()
@@ -67,7 +67,7 @@ final class LiveCameraViewController: UIViewController {
         debugView.updateConfiguration(initialTuning, exerciseDefinition: initialExerciseDefinition)
         tuningPanel.apply(configuration: initialTuning, exerciseDefinition: initialExerciseDefinition)
         updateCameraToggleButton(for: initialCameraPosition)
-        updateExerciseSelector(for: initialExerciseDefinition.id)
+        updateExercisePicker(for: initialExerciseDefinition.id)
         tuningPanel.onConfigurationChanged = { [weak self] config in
             guard let self else { return }
             self.scheduleConfigurationUpdate(config, for: self.selectedExerciseID)
@@ -165,22 +165,21 @@ final class LiveCameraViewController: UIViewController {
         view.bringSubviewToFront(statusLabel)
     }
 
-    private func setupExerciseSelector() {
-        exerciseSelector.selectedSegmentTintColor = UIColor.white.withAlphaComponent(0.92)
-        exerciseSelector.backgroundColor = UIColor.black.withAlphaComponent(0.55)
-        exerciseSelector.setTitleTextAttributes([.foregroundColor: UIColor.black], for: .selected)
-        exerciseSelector.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .normal)
-        exerciseSelector.translatesAutoresizingMaskIntoConstraints = false
-        exerciseSelector.addTarget(self, action: #selector(exerciseSelectionChanged), for: .valueChanged)
+    private func setupExercisePicker() {
+        exercisePicker.translatesAutoresizingMaskIntoConstraints = false
+        exercisePicker.onExerciseSelected = { [weak self] exerciseID in
+            self?.applyExerciseSelection(exerciseID, persistSelection: true)
+        }
 
-        view.addSubview(exerciseSelector)
+        view.addSubview(exercisePicker)
         NSLayoutConstraint.activate([
-            exerciseSelector.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 8),
-            exerciseSelector.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            exerciseSelector.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, multiplier: 0.66),
+            exercisePicker.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 8),
+            exercisePicker.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            exercisePicker.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, multiplier: 0.80),
+            exercisePicker.heightAnchor.constraint(equalToConstant: 94),
         ])
 
-        view.bringSubviewToFront(exerciseSelector)
+        view.bringSubviewToFront(exercisePicker)
     }
 
     private func setupCameraToggleButton() {
@@ -234,7 +233,7 @@ final class LiveCameraViewController: UIViewController {
             tuningPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
             tuningPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
             tuningPanel.bottomAnchor.constraint(equalTo: debugView.topAnchor, constant: -10),
-            tuningPanel.topAnchor.constraint(greaterThanOrEqualTo: exerciseSelector.bottomAnchor, constant: 8),
+            tuningPanel.topAnchor.constraint(greaterThanOrEqualTo: exercisePicker.bottomAnchor, constant: 8),
             tuningPanel.heightAnchor.constraint(greaterThanOrEqualToConstant: 240),
             preferredHeight,
         ])
@@ -254,12 +253,6 @@ final class LiveCameraViewController: UIViewController {
         saveCameraPosition(position)
     }
 
-    @objc private func exerciseSelectionChanged() {
-        let index = exerciseSelector.selectedSegmentIndex
-        guard LiveCameraCoordinator.availableExercises.indices.contains(index) else { return }
-        applyExerciseSelection(LiveCameraCoordinator.availableExercises[index].id, persistSelection: true)
-    }
-
     private func applyExerciseSelection(_ exerciseID: String, persistSelection: Bool) {
         guard let exerciseDefinition = LiveCameraCoordinator.definition(for: exerciseID) else { return }
 
@@ -270,17 +263,18 @@ final class LiveCameraViewController: UIViewController {
         lastRepCountForFeedback = 0
         debugView.updateConfiguration(tuning, exerciseDefinition: exerciseDefinition)
         tuningPanel.apply(configuration: tuning, exerciseDefinition: exerciseDefinition)
-        updateExerciseSelector(for: exerciseDefinition.id)
+        updateExercisePicker(for: exerciseDefinition.id)
         lastDebugUpdateTime = 0
         if persistSelection {
             saveExerciseID(exerciseDefinition.id)
         }
     }
 
-    private func updateExerciseSelector(for exerciseID: String) {
-        if let index = LiveCameraCoordinator.availableExercises.firstIndex(where: { $0.id == exerciseID }) {
-            exerciseSelector.selectedSegmentIndex = index
-        }
+    private func updateExercisePicker(for exerciseID: String) {
+        exercisePicker.apply(
+            exercises: LiveCameraCoordinator.availableExercises,
+            selectedExerciseID: exerciseID
+        )
     }
 
     private func updateCameraToggleButton(for position: AVCaptureDevice.Position) {

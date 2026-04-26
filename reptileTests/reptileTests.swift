@@ -12,11 +12,14 @@ struct ReptileTests {
 
         #expect(ExerciseCatalog.bicepCurl.id == "bicepCurl")
         #expect(ExerciseCatalog.bicepCurl.repSound == nil)
+
+        #expect(ExerciseCatalog.all.count == 2)
     }
 
     @Test func exerciseCatalog_resolvesByID() {
         #expect(ExerciseCatalog.definition(for: "squat")?.id == "squat")
         #expect(ExerciseCatalog.definition(for: "bicepCurl")?.id == "bicepCurl")
+        #expect(ExerciseCatalog.definition(for: "benchPress") == nil)
         #expect(ExerciseCatalog.definition(for: "unknown") == nil)
     }
 
@@ -67,6 +70,31 @@ struct ReptileTests {
         ])
 
         #expect(controls.allSatisfy { !$0.hint.isEmpty })
+    }
+
+    @Test func exerciseNodePickerLayout_selectsNearestNode() {
+        let nodes: [ExerciseNodePickerLayout.Node] = [
+            .init(id: "squat", center: CGPoint(x: 20, y: 20), radius: 10),
+            .init(id: "bicepCurl", center: CGPoint(x: 60, y: 20), radius: 10),
+            .init(id: "alt", center: CGPoint(x: 100, y: 20), radius: 10),
+        ]
+
+        let layout = ExerciseNodePickerLayout(nodes: nodes)
+
+        #expect(layout.nearestNodeID(to: CGPoint(x: 24, y: 22)) == "squat")
+        #expect(layout.nearestNodeID(to: CGPoint(x: 59, y: 19)) == "bicepCurl")
+        #expect(layout.nearestNodeID(to: CGPoint(x: 96, y: 23)) == "alt")
+    }
+
+    @Test func exerciseNodePickerLayout_returnsNilWhenTouchIsFarFromNodes() {
+        let nodes: [ExerciseNodePickerLayout.Node] = [
+            .init(id: "squat", center: CGPoint(x: 20, y: 20), radius: 10),
+            .init(id: "bicepCurl", center: CGPoint(x: 60, y: 20), radius: 10),
+            .init(id: "alt", center: CGPoint(x: 100, y: 20), radius: 10),
+        ]
+
+        let layout = ExerciseNodePickerLayout(nodes: nodes)
+        #expect(layout.nearestNodeID(to: CGPoint(x: 200, y: 120)) == nil)
     }
 
     @Test func exerciseRepSound_initializesWithExpectedValues() {
