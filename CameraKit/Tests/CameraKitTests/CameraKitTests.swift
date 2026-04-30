@@ -1750,12 +1750,15 @@ private func feedSquatCounter(
         rightShoulderFlexionDegrees: 12
     ), seconds: 0.1))
 
-    let shoulderBottomOnly = calculator.calculate(from: makeFrame(positions3D: benchPress3DJointPositions(
+    var shoulderBottomOnlyPositions = benchPress3DJointPositions(
         leftElbowFlexionDegrees: 14,
         rightElbowFlexionDegrees: 12,
         leftShoulderFlexionDegrees: 52,
         rightShoulderFlexionDegrees: 50
-    ), seconds: 0.2))
+    )
+    shoulderBottomOnlyPositions.removeValue(forKey: .leftWrist)
+    shoulderBottomOnlyPositions.removeValue(forKey: .rightWrist)
+    let shoulderBottomOnly = calculator.calculate(from: makeFrame(positions3D: shoulderBottomOnlyPositions, seconds: 0.2))
 
     #expect(lockout != nil)
     #expect(elbowBottomOnly != nil)
@@ -1763,6 +1766,159 @@ private func feedSquatCounter(
     #expect(lockout! < 0.15)
     #expect(elbowBottomOnly! > 0.85)
     #expect(shoulderBottomOnly! > 0.85)
+}
+
+@Test func benchPressFlexion3D_supportsSingleArmWithoutTorsoAnchors() {
+    let calculator = BenchPressFlexion3DMetricCalculator(
+        benchBottomElbowFlexionDegrees: 45,
+        benchBottomShoulderFlexionDegrees: 45,
+        benchLockoutElbowFlexionDegrees: 12,
+        benchLockoutShoulderFlexionDegrees: 12
+    )
+
+    var lockoutPositions = benchPress3DJointPositions(
+        leftElbowFlexionDegrees: 10,
+        rightElbowFlexionDegrees: 10,
+        leftShoulderFlexionDegrees: 10,
+        rightShoulderFlexionDegrees: 10,
+        hideRightArm: true
+    )
+    lockoutPositions.removeValue(forKey: .leftHip)
+    lockoutPositions.removeValue(forKey: .spine)
+    lockoutPositions.removeValue(forKey: .root)
+
+    var bottomPositions = benchPress3DJointPositions(
+        leftElbowFlexionDegrees: 48,
+        rightElbowFlexionDegrees: 10,
+        leftShoulderFlexionDegrees: 18,
+        rightShoulderFlexionDegrees: 10,
+        hideRightArm: true
+    )
+    bottomPositions.removeValue(forKey: .leftHip)
+    bottomPositions.removeValue(forKey: .spine)
+    bottomPositions.removeValue(forKey: .root)
+
+    let lockout = calculator.calculate(from: makeFrame(positions3D: lockoutPositions, seconds: 0.0))
+    let bottom = calculator.calculate(from: makeFrame(positions3D: bottomPositions, seconds: 0.1))
+
+    #expect(lockout != nil)
+    #expect(bottom != nil)
+    if let lockout {
+        #expect(lockout < 0.15)
+    }
+    if let bottom {
+        #expect(bottom > 0.85)
+    }
+}
+
+@Test func benchPressFlexion3D_supportsShoulderFallbackWithoutWristsOrTorsoAnchors() {
+    let calculator = BenchPressFlexion3DMetricCalculator(
+        benchBottomElbowFlexionDegrees: 45,
+        benchBottomShoulderFlexionDegrees: 45,
+        benchLockoutElbowFlexionDegrees: 12,
+        benchLockoutShoulderFlexionDegrees: 12
+    )
+
+    var lockoutPositions = benchPress3DJointPositions(
+        leftElbowFlexionDegrees: 12,
+        rightElbowFlexionDegrees: 12,
+        leftShoulderFlexionDegrees: 10,
+        rightShoulderFlexionDegrees: 10
+    )
+    lockoutPositions.removeValue(forKey: .leftWrist)
+    lockoutPositions.removeValue(forKey: .rightWrist)
+    lockoutPositions.removeValue(forKey: .leftHip)
+    lockoutPositions.removeValue(forKey: .rightHip)
+    lockoutPositions.removeValue(forKey: .spine)
+    lockoutPositions.removeValue(forKey: .root)
+
+    var bottomPositions = benchPress3DJointPositions(
+        leftElbowFlexionDegrees: 12,
+        rightElbowFlexionDegrees: 12,
+        leftShoulderFlexionDegrees: 52,
+        rightShoulderFlexionDegrees: 50
+    )
+    bottomPositions.removeValue(forKey: .leftWrist)
+    bottomPositions.removeValue(forKey: .rightWrist)
+    bottomPositions.removeValue(forKey: .leftHip)
+    bottomPositions.removeValue(forKey: .rightHip)
+    bottomPositions.removeValue(forKey: .spine)
+    bottomPositions.removeValue(forKey: .root)
+
+    let lockout = calculator.calculate(from: makeFrame(positions3D: lockoutPositions, seconds: 0.0))
+    let bottom = calculator.calculate(from: makeFrame(positions3D: bottomPositions, seconds: 0.1))
+
+    #expect(lockout != nil)
+    #expect(bottom != nil)
+    if let lockout {
+        #expect(lockout < 0.20)
+    }
+    if let bottom {
+        #expect(bottom > 0.85)
+    }
+}
+
+@Test func benchPressFlexion3D_returnsNilWhenNoAnglesAreAvailable() {
+    let calculator = BenchPressFlexion3DMetricCalculator()
+    let positions: [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>] = [
+        .leftShoulder: SIMD3(x: -0.2, y: 0.35, z: 2.0),
+        .rightShoulder: SIMD3(x: 0.2, y: 0.35, z: 2.0),
+    ]
+
+    #expect(calculator.calculate(from: makeFrame(positions3D: positions)) == nil)
+}
+
+@Test func benchPressFlexion3D_prefersElbowWhenShoulderDisagrees() {
+    let calculator = BenchPressFlexion3DMetricCalculator(
+        benchBottomElbowFlexionDegrees: 45,
+        benchBottomShoulderFlexionDegrees: 45,
+        benchLockoutElbowFlexionDegrees: 12,
+        benchLockoutShoulderFlexionDegrees: 12
+    )
+
+    let frame = makeFrame(positions3D: benchPress3DJointPositions(
+        leftElbowFlexionDegrees: 10,
+        rightElbowFlexionDegrees: 10,
+        leftShoulderFlexionDegrees: 55,
+        rightShoulderFlexionDegrees: 52
+    ))
+
+    let metric = calculator.calculate(from: frame)
+    #expect(metric != nil)
+    if let metric {
+        #expect(metric < 0.20)
+    }
+}
+
+@Test func benchPressFlexion3D_isInvariantToCameraDistanceWhenPostureIsConstant() {
+    let calculator = BenchPressFlexion3DMetricCalculator(
+        benchBottomElbowFlexionDegrees: 45,
+        benchBottomShoulderFlexionDegrees: 45,
+        benchLockoutElbowFlexionDegrees: 12,
+        benchLockoutShoulderFlexionDegrees: 12
+    )
+
+    let far = calculator.calculate(from: makeFrame(positions3D: benchPress3DJointPositions(
+        leftElbowFlexionDegrees: 30,
+        rightElbowFlexionDegrees: 30,
+        leftShoulderFlexionDegrees: 20,
+        rightShoulderFlexionDegrees: 20,
+        cameraZ: 2.4
+    )))
+
+    let close = calculator.calculate(from: makeFrame(positions3D: benchPress3DJointPositions(
+        leftElbowFlexionDegrees: 30,
+        rightElbowFlexionDegrees: 30,
+        leftShoulderFlexionDegrees: 20,
+        rightShoulderFlexionDegrees: 20,
+        cameraZ: 1.1
+    )))
+
+    #expect(far != nil)
+    #expect(close != nil)
+    if let far, let close {
+        #expect(abs(far - close) < 0.001)
+    }
 }
 
 @Test func benchPressExerciseProfile_usesCycleCounterAndSmoothingFilters() {

@@ -86,14 +86,14 @@ public final class BenchPressFlexion3DMetricCalculator: MetricCalculator, Exerci
             elbowFlexionDegrees: metrics.leftElbowFlexionDegrees,
             shoulderFlexionDegrees: metrics.leftShoulderFlexionDegrees
         ) != nil {
-            joints.append(contentsOf: available(in: points, names: [.leftShoulder, .leftElbow, .leftWrist, .leftHip, .spine, .root]))
+            joints.append(contentsOf: available(in: points, names: [.leftShoulder, .leftElbow, .leftWrist, .rightShoulder, .leftHip, .spine, .root]))
         }
 
         if sideProgress(
             elbowFlexionDegrees: metrics.rightElbowFlexionDegrees,
             shoulderFlexionDegrees: metrics.rightShoulderFlexionDegrees
         ) != nil {
-            joints.append(contentsOf: available(in: points, names: [.rightShoulder, .rightElbow, .rightWrist, .rightHip, .spine, .root]))
+            joints.append(contentsOf: available(in: points, names: [.rightShoulder, .rightElbow, .rightWrist, .leftShoulder, .rightHip, .spine, .root]))
         }
 
         return unique(joints)
@@ -156,32 +156,23 @@ public final class BenchPressFlexion3DMetricCalculator: MetricCalculator, Exerci
         elbowFlexionDegrees: CGFloat?,
         shoulderFlexionDegrees: CGFloat?
     ) -> CGFloat? {
-        let elbowProgress = elbowFlexionDegrees.map {
-            normalize(
-                value: $0,
+        if let elbowFlexionDegrees {
+            return normalize(
+                value: elbowFlexionDegrees,
                 lower: benchLockoutElbowFlexionDegrees,
                 upper: benchBottomElbowFlexionDegrees
             )
         }
 
-        let shoulderProgress = shoulderFlexionDegrees.map {
-            normalize(
-                value: $0,
+        if let shoulderFlexionDegrees {
+            return normalize(
+                value: shoulderFlexionDegrees,
                 lower: benchLockoutShoulderFlexionDegrees,
                 upper: benchBottomShoulderFlexionDegrees
             )
         }
 
-        switch (elbowProgress, shoulderProgress) {
-        case let (elbow?, shoulder?):
-            return max(elbow, shoulder)
-        case let (elbow?, nil):
-            return elbow
-        case let (nil, shoulder?):
-            return shoulder
-        default:
-            return nil
-        }
+        return nil
     }
 
     private func elbowFlexion(
@@ -205,13 +196,25 @@ public final class BenchPressFlexion3DMetricCalculator: MetricCalculator, Exerci
     ) -> CGFloat? {
         let joints = armJoints(side)
         guard let shoulder = points[joints.shoulder],
-              let elbow = points[joints.elbow],
-              let torsoAnchor = points[joints.hip] ?? points[.spine] ?? points[.root],
-              let angle = jointAngle(a: torsoAnchor, vertex: shoulder, b: elbow) else {
+              let elbow = points[joints.elbow] else {
             return nil
         }
 
-        return clampDegrees(angle)
+        if let torsoAnchor = points[joints.hip] ?? points[.spine] ?? points[.root],
+           let angle = jointAngle(a: torsoAnchor, vertex: shoulder, b: elbow) {
+            return clampDegrees(angle)
+        }
+
+        if let oppositeShoulder = points[oppositeShoulderName(for: side)],
+           let inferred = shoulderFlexionFromShoulderLine(
+               shoulder: shoulder,
+               elbow: elbow,
+               oppositeShoulder: oppositeShoulder
+           ) {
+            return inferred
+        }
+
+        return nil
     }
 
     private func armJoints(
@@ -228,6 +231,42 @@ public final class BenchPressFlexion3DMetricCalculator: MetricCalculator, Exerci
         case .right:
             return (.rightShoulder, .rightElbow, .rightWrist, .rightHip)
         }
+    }
+
+    private func oppositeShoulderName(for side: Side) -> VNHumanBodyPose3DObservation.JointName {
+        switch side {
+        case .left:
+            return .rightShoulder
+        case .right:
+            return .leftShoulder
+        }
+    }
+
+    private func shoulderFlexionFromShoulderLine(
+        shoulder: SIMD3<Float>,
+        elbow: SIMD3<Float>,
+        oppositeShoulder: SIMD3<Float>
+    ) -> CGFloat? {
+        let bodyLine = SIMD3<Float>(
+            oppositeShoulder.x - shoulder.x,
+            oppositeShoulder.y - shoulder.y,
+            oppositeShoulder.z - shoulder.z
+        )
+        let upperArm = SIMD3<Float>(
+            elbow.x - shoulder.x,
+            elbow.y - shoulder.y,
+            elbow.z - shoulder.z
+        )
+
+        let bodyLength = simd_length(bodyLine)
+        let upperArmLength = simd_length(upperArm)
+        guard bodyLength > 0.0001, upperArmLength > 0.0001 else { return nil }
+
+        let dot = simd_dot(bodyLine, upperArm)
+        let cosTheta = max(-1 as Float, min(1 as Float, dot / (bodyLength * upperArmLength)))
+        let angle = CGFloat(acos(cosTheta) * 180 / .pi)
+
+        return clampDegrees(abs(90 - angle))
     }
 
     private func jointAngle(a: SIMD3<Float>, vertex: SIMD3<Float>, b: SIMD3<Float>) -> CGFloat? {
