@@ -1363,6 +1363,23 @@ private func feedSquatCounter(
     #expect(counter.count == 3)
 }
 
+@Test func squatCounter_defaultTuningCountsTypicalSingleRep() {
+    var counter = SquatPhaseRepCounter(
+        minTimeBetweenReps: 0.6,
+        minAmplitude: 0.55,
+        upThreshold: 0.20,
+        downThreshold: 0.82,
+        inactivityResetSeconds: 3.0,
+        activityDeltaThreshold: 0.015,
+        descendEntryThreshold: 0.18,
+        standLockoutThreshold: 0.10
+    )
+
+    let cycle: [CGFloat] = [0.05, 0.14, 0.24, 0.46, 0.66, 0.72, 0.56, 0.39, 0.20, 0.09, 0.05]
+    feedSquatCounter(&counter, values: cycle)
+    #expect(counter.count == 1)
+}
+
 @Test func squatMetric_standingPositionIsNearZero() {
     let calculator = SquatDepthMetricCalculator(hipWeight: 1, kneeWeight: 0)
     let metric = calculator.calculate(from: makeFrame(squatJoints(depth: 0.0)))

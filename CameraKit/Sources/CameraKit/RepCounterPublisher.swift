@@ -7,7 +7,7 @@ import Vision
 private let logger = Logger(subsystem: "CameraKit", category: "repCounting")
 
 /// Quality of pose detection for rep counting
-public enum DetectionQuality: Sendable {
+public enum DetectionQuality: Sendable, Equatable {
     case good    // Most joints visible
     case partial // Some joints visible
     case poor    // Very few joints visible
@@ -162,10 +162,10 @@ public struct RepCountingConfiguration: Sendable {
     }
 
     public static let squatDefault = RepCountingConfiguration(
-        gates: .init(minTimeBetweenReps: 0.6, minAmplitude: 0.55, upThreshold: 0.20, downThreshold: 0.82),
+        gates: .init(minTimeBetweenReps: 0.6, minAmplitude: 0.55, upThreshold: 0.20, downThreshold: 0.70),
         squat: .init(
             descendEntryThreshold: 0.18,
-            standLockoutThreshold: 0.10,
+            standLockoutThreshold: 0.12,
             kneeBottomFlexionDegrees: 72,
             hipBottomFlexionDegrees: 52,
             kneeLockoutFlexionDegrees: 18,
@@ -266,6 +266,8 @@ public final class RepCounterPublisher: @unchecked Sendable {
     private var benchReady: Bool = false
     private let benchGateLossTimeoutSeconds: Double = 0.4
     private let benchGateRearmSeconds: Double = 0.5
+    private var processingStrategy: (any ExerciseProcessingStrategy)?
+    private let enableSquatStrategy: Bool
 
     @inline(__always)
     private func assertOnProcessingQueue() {
@@ -287,6 +289,7 @@ public final class RepCounterPublisher: @unchecked Sendable {
         peakDetectorFactory: ((RepCountingConfiguration) -> any PeakDetector)? = nil,
         repCounterFactory: ((RepCountingConfiguration) -> any RepCounter)? = nil,
         metricFilterFactory: ((RepCountingConfiguration) -> [any MetricFilter])? = nil
+        , enableSquatStrategy: Bool = true
     ) {
         self.exerciseProfileID = exerciseProfileID
         self.metricCalculatorFactory = metricCalculatorFactory ?? { _ in metricCalculator }
@@ -298,6 +301,10 @@ public final class RepCounterPublisher: @unchecked Sendable {
         self.repCounter = repCounter
         self.metricFilters = metricFilters
         self.armingThreshold = armingThreshold
+        self.enableSquatStrategy = enableSquatStrategy
+        if enableSquatStrategy, exerciseProfileID == "squat" {
+            self.processingStrategy = SquatProcessingStrategy()
+        }
     }
 
     public convenience init(
@@ -315,6 +322,7 @@ public final class RepCounterPublisher: @unchecked Sendable {
             peakDetectorFactory: { exerciseProfile.makePeakDetector(configuration: $0) },
             repCounterFactory: { exerciseProfile.makeRepCounter(configuration: $0) },
             metricFilterFactory: { exerciseProfile.makeMetricFilters(configuration: $0) }
+            , enableSquatStrategy: true
         )
     }
 
@@ -352,6 +360,9 @@ public final class RepCounterPublisher: @unchecked Sendable {
             self.metricFilters = self.metricFilterFactory(configuration)
             self.armingThreshold = configuration.common.armingThreshold
             self.metricWindow.removeAll()
+            self.processingStrategy = self.enableSquatStrategy && exerciseProfile.id == "squat"
+                ? SquatProcessingStrategy()
+                : nil
         }
     }
 
@@ -366,6 +377,11 @@ public final class RepCounterPublisher: @unchecked Sendable {
 
         if exerciseProfileID == "benchPress" {
             processBench(poseFrame)
+            return
+        }
+
+        if processingStrategy != nil, exerciseProfileID == "squat" {
+            processViaStrategy(poseFrame)
             return
         }
 
@@ -432,6 +448,47 @@ public final class RepCounterPublisher: @unchecked Sendable {
             quality: quality,
             trackedJoints: trackedJoints,
             exerciseDiagnostics: exerciseDiagnostics
+        )
+    }
+
+    private func processViaStrategy(_ poseFrame: PoseFrame) {
+        guard var strategy = processingStrategy else {
+            process(poseFrame)
+            return
+        }
+
+        var environment = RepCountingProcessingEnvironment(
+            metricCalculator: metricCalculator,
+            peakDetector: peakDetector,
+            repCounter: repCounter,
+            metricFilters: metricFilters,
+            armingThreshold: armingThreshold,
+            metricWindow: metricWindow,
+            metricWindowCapacity: metricWindowCapacity,
+            exerciseProfileID: exerciseProfileID
+        )
+
+        let previousCount = environment.repCounter.count
+        let result = strategy.process(poseFrame, environment: &environment)
+
+        metricCalculator = environment.metricCalculator
+        peakDetector = environment.peakDetector
+        repCounter = environment.repCounter
+        metricFilters = environment.metricFilters
+        metricWindow = environment.metricWindow
+        processingStrategy = strategy
+
+        if repCounter.count != previousCount {
+            logger.info("Rep counted — total=\(self.repCounter.count) state=\(self.repCounter.state.rawValue)")
+        }
+
+        sendOutput(
+            poseFrame: poseFrame,
+            metric: result.metric,
+            quality: result.quality,
+            trackedJoints: result.trackedJoints,
+            exerciseDiagnostics: result.exerciseDiagnostics,
+            statusHint: result.statusHint
         )
     }
 
@@ -570,6 +627,7 @@ public final class RepCounterPublisher: @unchecked Sendable {
             self.benchGateClosedSince = nil
             self.benchGateOpenSince = nil
             self.benchReady = false
+            self.processingStrategy?.reset()
         }
     }
 

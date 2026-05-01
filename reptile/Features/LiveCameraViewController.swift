@@ -25,6 +25,7 @@ final class LiveCameraViewController: UIViewController {
     private let tuningPanel = RepTuningPanelView()
     private let repFeedbackPlayer = RepFeedbackPlayer()
     private let tuningUpdateCoordinator = RepTuningUpdateCoordinator()
+    private let metricsCaptureLogger = MetricsCaptureLogger()
 
     private let coordinator = LiveCameraCoordinator()
     private var selectedExerciseID = LiveCameraCoordinator.defaultExercise.id
@@ -36,6 +37,14 @@ final class LiveCameraViewController: UIViewController {
     private lazy var debugToggleGesture: UITapGestureRecognizer = {
         let gesture = UITapGestureRecognizer(target: self, action: #selector(toggleDebug))
         gesture.numberOfTapsRequired = 2
+        gesture.cancelsTouchesInView = false
+        gesture.delegate = self
+        return gesture
+    }()
+    private lazy var exportMetricsGesture: UITapGestureRecognizer = {
+        let gesture = UITapGestureRecognizer(target: self, action: #selector(exportMetricsLog))
+        gesture.numberOfTapsRequired = 3
+        gesture.numberOfTouchesRequired = 2
         gesture.cancelsTouchesInView = false
         gesture.delegate = self
         return gesture
@@ -54,6 +63,7 @@ final class LiveCameraViewController: UIViewController {
         setupDebugView()
         setupTuningPanel()
         view.addGestureRecognizer(debugToggleGesture)
+        view.addGestureRecognizer(exportMetricsGesture)
 
         let initialExerciseID = loadSavedExerciseID()
         let initialExerciseDefinition = LiveCameraCoordinator.definition(for: initialExerciseID)
@@ -253,6 +263,24 @@ final class LiveCameraViewController: UIViewController {
         saveCameraPosition(position)
     }
 
+    @objc private func exportMetricsLog() {
+        do {
+            let url = try metricsCaptureLogger.exportToTempFile()
+            statusLabel.text = "Metrics exported: \(url.lastPathComponent)"
+            statusLabel.isHidden = false
+
+            let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+            if let popover = activity.popoverPresentationController {
+                popover.sourceView = statusLabel
+                popover.sourceRect = statusLabel.bounds
+            }
+            present(activity, animated: true)
+        } catch {
+            statusLabel.text = "Metrics export failed"
+            statusLabel.isHidden = false
+        }
+    }
+
     private func applyExerciseSelection(_ exerciseID: String, persistSelection: Bool) {
         guard let exerciseDefinition = LiveCameraCoordinator.definition(for: exerciseID) else { return }
         if selectedExerciseID == exerciseDefinition.id {
@@ -302,6 +330,7 @@ final class LiveCameraViewController: UIViewController {
         overlayView.highlightedJoints = model.trackedJoints
 
         if let output = model.output {
+            metricsCaptureLogger.record(output)
             if output.repCount > lastRepCountForFeedback {
                 let sound = LiveCameraCoordinator.definition(for: output.exerciseProfileID)?.repSound
                 repFeedbackPlayer.playRepSound(sound)
