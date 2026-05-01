@@ -214,6 +214,7 @@ public struct RepCounterOutput: Sendable {
     public let runningMax: CGFloat
     public let trackedJoints: [VNHumanBodyPose3DObservation.JointName]
     public let exerciseDiagnostics: ExerciseDiagnostics?
+    public let statusHint: String?
 
     public init(
         exerciseProfileID: String,
@@ -224,7 +225,8 @@ public struct RepCounterOutput: Sendable {
         detectionQuality: DetectionQuality,
         runningMax: CGFloat = 0,
         trackedJoints: [VNHumanBodyPose3DObservation.JointName] = [],
-        exerciseDiagnostics: ExerciseDiagnostics? = nil
+        exerciseDiagnostics: ExerciseDiagnostics? = nil,
+        statusHint: String? = nil
     ) {
         self.exerciseProfileID = exerciseProfileID
         self.poseFrame = poseFrame
@@ -235,6 +237,7 @@ public struct RepCounterOutput: Sendable {
         self.runningMax = runningMax
         self.trackedJoints = trackedJoints
         self.exerciseDiagnostics = exerciseDiagnostics
+        self.statusHint = statusHint
     }
 }
 
@@ -257,6 +260,12 @@ public final class RepCounterPublisher: @unchecked Sendable {
     private var metricWindow: [CGFloat] = []
     private let metricWindowCapacity = 60
     private var runningMax: CGFloat { metricWindow.max() ?? 0 }
+    private var lastGoodBenchMetric: CGFloat?
+    private var benchGateClosedSince: CMTime?
+    private var benchGateOpenSince: CMTime?
+    private var benchReady: Bool = false
+    private let benchGateLossTimeoutSeconds: Double = 0.4
+    private let benchGateRearmSeconds: Double = 0.5
 
     @inline(__always)
     private func assertOnProcessingQueue() {
@@ -355,6 +364,11 @@ public final class RepCounterPublisher: @unchecked Sendable {
     private func process(_ poseFrame: PoseFrame) {
         assertOnProcessingQueue()
 
+        if exerciseProfileID == "benchPress" {
+            processBench(poseFrame)
+            return
+        }
+
         let exerciseDiagnostics = currentExerciseDiagnostics(from: poseFrame)
 
         guard let metric = metricCalculator.calculate(from: poseFrame) else {
@@ -421,12 +435,92 @@ public final class RepCounterPublisher: @unchecked Sendable {
         )
     }
 
+    private func processBench(_ poseFrame: PoseFrame) {
+        let exerciseDiagnostics = currentExerciseDiagnostics(from: poseFrame)
+        let trackedJoints = metricCalculator.trackedJoints(from: poseFrame)
+        let hasVisibility = benchVisibilitySatisfied(in: poseFrame)
+
+        if hasVisibility {
+            if benchGateOpenSince == nil {
+                benchGateOpenSince = poseFrame.timestamp
+            }
+            benchGateClosedSince = nil
+            if let openSince = benchGateOpenSince,
+               CMTimeGetSeconds(poseFrame.timestamp - openSince) >= benchGateRearmSeconds {
+                benchReady = true
+            }
+        } else {
+            benchGateOpenSince = nil
+            if benchGateClosedSince == nil {
+                benchGateClosedSince = poseFrame.timestamp
+            }
+
+            if let closedSince = benchGateClosedSince,
+               CMTimeGetSeconds(poseFrame.timestamp - closedSince) > benchGateLossTimeoutSeconds {
+                benchReady = false
+                repCounter.reset()
+                metricWindow.removeAll()
+                lastGoodBenchMetric = nil
+            }
+        }
+
+        let rawMetric = metricCalculator.calculate(from: poseFrame)
+        let metricToUse: CGFloat?
+
+        if hasVisibility, let rawMetric {
+            metricToUse = rawMetric
+            lastGoodBenchMetric = rawMetric
+        } else if let closedSince = benchGateClosedSince,
+                  CMTimeGetSeconds(poseFrame.timestamp - closedSince) <= benchGateLossTimeoutSeconds {
+            metricToUse = lastGoodBenchMetric
+        } else {
+            metricToUse = nil
+        }
+
+        guard benchReady, let metric = metricToUse else {
+            sendOutput(
+                poseFrame: poseFrame,
+                metric: metricToUse,
+                quality: .poor,
+                trackedJoints: trackedJoints,
+                exerciseDiagnostics: exerciseDiagnostics,
+                statusHint: benchStatusHint(hasVisibility: hasVisibility)
+            )
+            return
+        }
+
+        var filteredMetric = metric
+        for i in metricFilters.indices {
+            var f = metricFilters[i]
+            filteredMetric = f.filter(filteredMetric)
+            metricFilters[i] = f
+        }
+
+        repCounter.ingestSample(timestamp: poseFrame.timestamp, metricValue: filteredMetric)
+
+        metricWindow.append(filteredMetric)
+        if metricWindow.count > metricWindowCapacity { metricWindow.removeFirst() }
+
+        let quality: DetectionQuality = poseFrame.joints.count >= 10 ? .good :
+                                        poseFrame.joints.count >= 5 ? .partial : .poor
+
+        sendOutput(
+            poseFrame: poseFrame,
+            metric: filteredMetric,
+            quality: quality,
+            trackedJoints: trackedJoints,
+            exerciseDiagnostics: exerciseDiagnostics,
+            statusHint: nil
+        )
+    }
+
     private func sendOutput(
         poseFrame: PoseFrame,
         metric: CGFloat?,
         quality: DetectionQuality,
         trackedJoints: [VNHumanBodyPose3DObservation.JointName],
-        exerciseDiagnostics: ExerciseDiagnostics?
+        exerciseDiagnostics: ExerciseDiagnostics?,
+        statusHint: String? = nil
     ) {
         assertOnProcessingQueue()
 
@@ -439,9 +533,27 @@ public final class RepCounterPublisher: @unchecked Sendable {
             detectionQuality: quality,
             runningMax: runningMax,
             trackedJoints: trackedJoints,
-            exerciseDiagnostics: exerciseDiagnostics
+            exerciseDiagnostics: exerciseDiagnostics,
+            statusHint: statusHint
         )
         subject.send(output)
+    }
+
+    private func benchVisibilitySatisfied(in poseFrame: PoseFrame) -> Bool {
+        let points = poseFrame.positions3D
+        let hasTorsoAnchor = points[.leftHip] != nil || points[.rightHip] != nil || points[.spine] != nil || points[.root] != nil
+        guard hasTorsoAnchor else { return false }
+
+        let leftVisible = points[.leftShoulder] != nil && points[.leftElbow] != nil && points[.leftWrist] != nil
+        let rightVisible = points[.rightShoulder] != nil && points[.rightElbow] != nil && points[.rightWrist] != nil
+        return leftVisible || rightVisible
+    }
+
+    private func benchStatusHint(hasVisibility: Bool) -> String {
+        if !hasVisibility {
+            return "Reframe: show shoulder/elbow/wrist"
+        }
+        return "Stabilizing..."
     }
 
     private func currentExerciseDiagnostics(from poseFrame: PoseFrame) -> ExerciseDiagnostics? {
@@ -454,6 +566,10 @@ public final class RepCounterPublisher: @unchecked Sendable {
             self.assertOnProcessingQueue()
             self.repCounter.reset()
             self.metricWindow.removeAll()
+            self.lastGoodBenchMetric = nil
+            self.benchGateClosedSince = nil
+            self.benchGateOpenSince = nil
+            self.benchReady = false
         }
     }
 

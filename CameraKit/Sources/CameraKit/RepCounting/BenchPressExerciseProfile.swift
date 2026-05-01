@@ -24,7 +24,7 @@ public struct BenchPressExerciseProfile: ExerciseProfile {
     }
 
     public func makeRepCounter(configuration: RepCountingConfiguration) -> any RepCounter {
-        CurlPhaseRepCounter(
+        BenchPressPhaseRepCounter(
             minTimeBetweenReps: configuration.gates.minTimeBetweenReps,
             minAmplitude: configuration.gates.minAmplitude,
             upThreshold: configuration.gates.upThreshold,

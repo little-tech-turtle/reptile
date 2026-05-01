@@ -590,3 +590,204 @@ public struct SquatPhaseRepCounter: RepCounter {
         lastRepTime = .zero
     }
 }
+
+public struct BenchPressPhaseRepCounter: RepCounter {
+    private enum Phase {
+        case lockout
+        case lowering
+        case bottom
+        case pressing
+    }
+
+    public private(set) var count: Int = 0
+    public private(set) var state: RepCounterState = .up
+    public var consumesPeakEvents: Bool { false }
+
+    private var minTimeBetweenReps: Double
+    private var minAmplitude: CGFloat
+    private var upThreshold: CGFloat
+    private var downThreshold: CGFloat
+    private var inactivityResetSeconds: Double
+    private var activityDeltaThreshold: CGFloat
+
+    private let movementDeltaThreshold: CGFloat
+    private let minCycleDuration: Double
+    private let lockoutDwellSeconds: Double
+
+    private var phase: Phase = .lockout
+    private var lastObservedMetric: CGFloat?
+    private var lastActivityTime: CMTime?
+    private var idleResetArmed: Bool = true
+
+    private var cycleStartTime: CMTime?
+    private var cycleMinValue: CGFloat?
+    private var cycleMaxValue: CGFloat?
+    private var lockoutCandidateStartTime: CMTime?
+    private var lastRepTime: CMTime = .zero
+
+    public init(
+        minTimeBetweenReps: Double = 0.5,
+        minAmplitude: CGFloat = 0.20,
+        upThreshold: CGFloat = 0.60,
+        downThreshold: CGFloat = 0.30,
+        inactivityResetSeconds: Double = 3.0,
+        activityDeltaThreshold: CGFloat = 0.015,
+        movementDeltaThreshold: CGFloat = 0.010,
+        minCycleDuration: Double = 0.35,
+        lockoutDwellSeconds: Double = 0.15
+    ) {
+        self.minTimeBetweenReps = minTimeBetweenReps
+        self.minAmplitude = minAmplitude
+        self.upThreshold = upThreshold
+        self.downThreshold = downThreshold
+        self.inactivityResetSeconds = inactivityResetSeconds
+        self.activityDeltaThreshold = activityDeltaThreshold
+        self.movementDeltaThreshold = movementDeltaThreshold
+        self.minCycleDuration = minCycleDuration
+        self.lockoutDwellSeconds = lockoutDwellSeconds
+    }
+
+    public mutating func updateTuning(_ tuning: RepCounterTuning) {
+        minTimeBetweenReps = tuning.minTimeBetweenReps
+        minAmplitude = tuning.minAmplitude
+        upThreshold = tuning.upThreshold
+        downThreshold = tuning.downThreshold
+        inactivityResetSeconds = tuning.inactivityResetSeconds
+        activityDeltaThreshold = tuning.activityDeltaThreshold
+    }
+
+    public mutating func ingestSample(timestamp: CMTime, metricValue: CGFloat) {
+        let previous = lastObservedMetric ?? metricValue
+        let delta = abs(metricValue - previous)
+
+        if lastObservedMetric == nil || delta >= activityDeltaThreshold {
+            lastActivityTime = timestamp
+            idleResetArmed = true
+        }
+
+        lastObservedMetric = metricValue
+        updateState(metricValue: metricValue)
+
+        guard !handleIdleResetIfNeeded(timestamp: timestamp) else { return }
+
+        let rising = metricValue > previous + movementDeltaThreshold
+        let falling = metricValue < previous - movementDeltaThreshold
+
+        switch phase {
+        case .lockout:
+            lockoutCandidateStartTime = nil
+            guard metricValue >= downThreshold, rising else { return }
+            phase = .lowering
+            cycleStartTime = timestamp
+            cycleMinValue = metricValue
+            cycleMaxValue = metricValue
+
+        case .lowering:
+            cycleMinValue = min(cycleMinValue ?? metricValue, metricValue)
+            cycleMaxValue = max(cycleMaxValue ?? metricValue, metricValue)
+
+            if metricValue >= upThreshold {
+                phase = .bottom
+                return
+            }
+
+            if metricValue <= downThreshold, falling {
+                clearCycle()
+                phase = .lockout
+            }
+
+        case .bottom:
+            cycleMinValue = min(cycleMinValue ?? metricValue, metricValue)
+            cycleMaxValue = max(cycleMaxValue ?? metricValue, metricValue)
+
+            if metricValue < upThreshold - movementDeltaThreshold, falling {
+                phase = .pressing
+            }
+
+        case .pressing:
+            cycleMinValue = min(cycleMinValue ?? metricValue, metricValue)
+            cycleMaxValue = max(cycleMaxValue ?? metricValue, metricValue)
+
+            if metricValue >= upThreshold, rising {
+                phase = .bottom
+                lockoutCandidateStartTime = nil
+                return
+            }
+
+            guard metricValue <= downThreshold else {
+                lockoutCandidateStartTime = nil
+                return
+            }
+
+            if lockoutCandidateStartTime == nil {
+                lockoutCandidateStartTime = timestamp
+                return
+            }
+
+            let dwell = CMTimeGetSeconds(timestamp - (lockoutCandidateStartTime ?? timestamp))
+            guard dwell >= lockoutDwellSeconds else { return }
+
+            let startTime = cycleStartTime ?? timestamp
+            let minValue = cycleMinValue ?? metricValue
+            let maxValue = cycleMaxValue ?? metricValue
+            let amplitude = maxValue - minValue
+            let cycleDuration = CMTimeGetSeconds(timestamp - startTime)
+            let timeSinceLastRep = CMTimeGetSeconds(timestamp - lastRepTime)
+
+            if amplitude >= minAmplitude,
+               cycleDuration >= minCycleDuration,
+               timeSinceLastRep >= minTimeBetweenReps {
+                count += 1
+                lastRepTime = timestamp
+            }
+
+            clearCycle()
+            lockoutCandidateStartTime = nil
+            phase = .lockout
+        }
+    }
+
+    public mutating func processPeak(_ peak: PeakType, timestamp: CMTime, metricValue: CGFloat) {}
+
+    public mutating func reset() {
+        count = 0
+        state = .up
+        phase = .lockout
+        lastObservedMetric = nil
+        lastActivityTime = nil
+        idleResetArmed = true
+        clearCycle()
+        lockoutCandidateStartTime = nil
+        lastRepTime = .zero
+    }
+
+    private mutating func updateState(metricValue: CGFloat) {
+        if metricValue <= downThreshold {
+            state = .up
+        } else if metricValue >= upThreshold {
+            state = .down
+        } else {
+            state = .transition
+        }
+    }
+
+    private mutating func handleIdleResetIfNeeded(timestamp: CMTime) -> Bool {
+        guard let activityTime = lastActivityTime else { return false }
+
+        let idleSeconds = CMTimeGetSeconds(timestamp - activityTime)
+        guard idleSeconds >= inactivityResetSeconds, idleResetArmed else { return false }
+
+        if count > 0 || phase != .lockout {
+            reset()
+        }
+
+        idleResetArmed = false
+        return true
+    }
+
+    private mutating func clearCycle() {
+        cycleStartTime = nil
+        cycleMinValue = nil
+        cycleMaxValue = nil
+    }
+}

@@ -203,6 +203,10 @@ final class LiveCameraCoordinator {
         state: LivePipelineState,
         output: RepCounterOutput?
     ) -> String {
+        if let statusHint = output?.statusHint {
+            return statusHint
+        }
+
         switch state {
         case .idle:
             return ""

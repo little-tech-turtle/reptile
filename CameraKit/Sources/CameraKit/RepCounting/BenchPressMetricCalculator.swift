@@ -10,6 +10,7 @@ public struct BenchPressFlexionMetrics: Sendable {
     public let rightElbowFlexionDegrees: CGFloat?
     public let leftShoulderFlexionDegrees: CGFloat?
     public let rightShoulderFlexionDegrees: CGFloat?
+    public let activeSide: CurlActiveSide?
 
     public init(
         elbowFlexionDegrees: CGFloat?,
@@ -17,7 +18,8 @@ public struct BenchPressFlexionMetrics: Sendable {
         leftElbowFlexionDegrees: CGFloat?,
         rightElbowFlexionDegrees: CGFloat?,
         leftShoulderFlexionDegrees: CGFloat?,
-        rightShoulderFlexionDegrees: CGFloat?
+        rightShoulderFlexionDegrees: CGFloat?,
+        activeSide: CurlActiveSide?
     ) {
         self.elbowFlexionDegrees = elbowFlexionDegrees
         self.shoulderFlexionDegrees = shoulderFlexionDegrees
@@ -25,6 +27,7 @@ public struct BenchPressFlexionMetrics: Sendable {
         self.rightElbowFlexionDegrees = rightElbowFlexionDegrees
         self.leftShoulderFlexionDegrees = leftShoulderFlexionDegrees
         self.rightShoulderFlexionDegrees = rightShoulderFlexionDegrees
+        self.activeSide = activeSide
     }
 }
 
@@ -33,6 +36,7 @@ public final class BenchPressFlexion3DMetricCalculator: MetricCalculator, Exerci
     private let benchBottomShoulderFlexionDegrees: CGFloat
     private let benchLockoutElbowFlexionDegrees: CGFloat
     private let benchLockoutShoulderFlexionDegrees: CGFloat
+    private var lockedSide: Side?
 
     public init(
         benchBottomElbowFlexionDegrees: CGFloat = 45,
@@ -53,27 +57,16 @@ public final class BenchPressFlexion3DMetricCalculator: MetricCalculator, Exerci
     }
 
     public func calculate(from frame: PoseFrame) -> CGFloat? {
-        guard let metrics = flexionMetrics(from: frame) else { return nil }
-
-        let leftProgress = sideProgress(
-            elbowFlexionDegrees: metrics.leftElbowFlexionDegrees,
-            shoulderFlexionDegrees: metrics.leftShoulderFlexionDegrees
-        )
-        let rightProgress = sideProgress(
-            elbowFlexionDegrees: metrics.rightElbowFlexionDegrees,
-            shoulderFlexionDegrees: metrics.rightShoulderFlexionDegrees
-        )
-
-        switch (leftProgress, rightProgress) {
-        case let (left?, right?):
-            return clamp((left + right) / 2)
-        case let (left?, nil):
-            return clamp(left)
-        case let (nil, right?):
-            return clamp(right)
-        default:
+        guard let metrics = flexionMetrics(from: frame),
+              let elbowFlexion = metrics.elbowFlexionDegrees else {
             return nil
         }
+
+        return clamp(normalize(
+            value: elbowFlexion,
+            lower: benchLockoutElbowFlexionDegrees,
+            upper: benchBottomElbowFlexionDegrees
+        ))
     }
 
     public func trackedJoints(from frame: PoseFrame) -> [VNHumanBodyPose3DObservation.JointName] {
@@ -82,18 +75,15 @@ public final class BenchPressFlexion3DMetricCalculator: MetricCalculator, Exerci
         let points = frame.positions3D
         var joints: [VNHumanBodyPose3DObservation.JointName] = []
 
-        if sideProgress(
-            elbowFlexionDegrees: metrics.leftElbowFlexionDegrees,
-            shoulderFlexionDegrees: metrics.leftShoulderFlexionDegrees
-        ) != nil {
-            joints.append(contentsOf: available(in: points, names: [.leftShoulder, .leftElbow, .leftWrist, .rightShoulder, .leftHip, .spine, .root]))
-        }
-
-        if sideProgress(
-            elbowFlexionDegrees: metrics.rightElbowFlexionDegrees,
-            shoulderFlexionDegrees: metrics.rightShoulderFlexionDegrees
-        ) != nil {
-            joints.append(contentsOf: available(in: points, names: [.rightShoulder, .rightElbow, .rightWrist, .leftShoulder, .rightHip, .spine, .root]))
+        switch metrics.activeSide {
+        case .left:
+            joints.append(contentsOf: available(in: points, names: [.leftShoulder, .leftElbow, .leftWrist]))
+        case .right:
+            joints.append(contentsOf: available(in: points, names: [.rightShoulder, .rightElbow, .rightWrist]))
+        case .both:
+            joints.append(contentsOf: available(in: points, names: [.leftShoulder, .leftElbow, .leftWrist, .rightShoulder, .rightElbow, .rightWrist]))
+        case nil:
+            break
         }
 
         return unique(joints)
@@ -107,17 +97,20 @@ public final class BenchPressFlexion3DMetricCalculator: MetricCalculator, Exerci
         let leftShoulder = shoulderFlexion(for: .left, points: points)
         let rightShoulder = shoulderFlexion(for: .right, points: points)
 
+        let selection = selectActiveSide(left: leftElbow, right: rightElbow)
+
         guard leftElbow != nil || rightElbow != nil || leftShoulder != nil || rightShoulder != nil else {
             return nil
         }
 
         return BenchPressFlexionMetrics(
-            elbowFlexionDegrees: average(leftElbow, rightElbow),
+            elbowFlexionDegrees: selection.elbowFlexion,
             shoulderFlexionDegrees: average(leftShoulder, rightShoulder),
             leftElbowFlexionDegrees: leftElbow,
             rightElbowFlexionDegrees: rightElbow,
             leftShoulderFlexionDegrees: leftShoulder,
-            rightShoulderFlexionDegrees: rightShoulder
+            rightShoulderFlexionDegrees: rightShoulder,
+            activeSide: selection.active
         )
     }
 
@@ -144,7 +137,12 @@ public final class BenchPressFlexion3DMetricCalculator: MetricCalculator, Exerci
             scalars["bench.rightShoulderFlexionDegrees"] = Double(value)
         }
 
-        return ExerciseDiagnostics(scalars: scalars)
+        var labels: [String: String] = [:]
+        if let activeSide = metrics.activeSide?.rawValue {
+            labels["bench.activeSide"] = activeSide
+        }
+
+        return ExerciseDiagnostics(scalars: scalars, labels: labels)
     }
 
     private enum Side {
@@ -152,27 +150,58 @@ public final class BenchPressFlexion3DMetricCalculator: MetricCalculator, Exerci
         case right
     }
 
-    private func sideProgress(
-        elbowFlexionDegrees: CGFloat?,
-        shoulderFlexionDegrees: CGFloat?
-    ) -> CGFloat? {
-        if let elbowFlexionDegrees {
-            return normalize(
-                value: elbowFlexionDegrees,
-                lower: benchLockoutElbowFlexionDegrees,
-                upper: benchBottomElbowFlexionDegrees
-            )
+    private struct SideSelection {
+        let active: CurlActiveSide?
+        let elbowFlexion: CGFloat?
+    }
+
+    private func selectActiveSide(left: CGFloat?, right: CGFloat?) -> SideSelection {
+        if let lockedSide {
+            let lockedValue = value(for: lockedSide, left: left, right: right)
+            if let lockedValue, lockedValue > benchLockoutElbowFlexionDegrees {
+                return SideSelection(active: activeSide(for: lockedSide), elbowFlexion: lockedValue)
+            }
+            self.lockedSide = nil
         }
 
-        if let shoulderFlexionDegrees {
-            return normalize(
-                value: shoulderFlexionDegrees,
-                lower: benchLockoutShoulderFlexionDegrees,
-                upper: benchBottomShoulderFlexionDegrees
-            )
+        switch (left, right) {
+        case let (l?, r?):
+            if l == r {
+                return SideSelection(active: .both, elbowFlexion: (l + r) / 2)
+            }
+            if l > r {
+                if l >= benchLockoutElbowFlexionDegrees + 1 { lockedSide = .left }
+                return SideSelection(active: .left, elbowFlexion: l)
+            }
+            if r >= benchLockoutElbowFlexionDegrees + 1 { lockedSide = .right }
+            return SideSelection(active: .right, elbowFlexion: r)
+        case let (l?, nil):
+            if l >= benchLockoutElbowFlexionDegrees + 1 { lockedSide = .left }
+            return SideSelection(active: .left, elbowFlexion: l)
+        case let (nil, r?):
+            if r >= benchLockoutElbowFlexionDegrees + 1 { lockedSide = .right }
+            return SideSelection(active: .right, elbowFlexion: r)
+        default:
+            return SideSelection(active: nil, elbowFlexion: nil)
         }
+    }
 
-        return nil
+    private func value(for side: Side, left: CGFloat?, right: CGFloat?) -> CGFloat? {
+        switch side {
+        case .left:
+            return left
+        case .right:
+            return right
+        }
+    }
+
+    private func activeSide(for side: Side) -> CurlActiveSide {
+        switch side {
+        case .left:
+            return .left
+        case .right:
+            return .right
+        }
     }
 
     private func elbowFlexion(

@@ -1728,7 +1728,7 @@ private func feedSquatCounter(
     #expect(switchedMetric! > 0.90)
 }
 
-@Test func benchPressFlexion3D_lockoutLowBottomHighWithEitherJointTolerance() {
+@Test func benchPressFlexion3D_lockoutLowBottomHighWithElbowSignal() {
     let calculator = BenchPressFlexion3DMetricCalculator(
         benchBottomElbowFlexionDegrees: 45,
         benchBottomShoulderFlexionDegrees: 45,
@@ -1750,25 +1750,13 @@ private func feedSquatCounter(
         rightShoulderFlexionDegrees: 12
     ), seconds: 0.1))
 
-    var shoulderBottomOnlyPositions = benchPress3DJointPositions(
-        leftElbowFlexionDegrees: 14,
-        rightElbowFlexionDegrees: 12,
-        leftShoulderFlexionDegrees: 52,
-        rightShoulderFlexionDegrees: 50
-    )
-    shoulderBottomOnlyPositions.removeValue(forKey: .leftWrist)
-    shoulderBottomOnlyPositions.removeValue(forKey: .rightWrist)
-    let shoulderBottomOnly = calculator.calculate(from: makeFrame(positions3D: shoulderBottomOnlyPositions, seconds: 0.2))
-
     #expect(lockout != nil)
     #expect(elbowBottomOnly != nil)
-    #expect(shoulderBottomOnly != nil)
     #expect(lockout! < 0.15)
     #expect(elbowBottomOnly! > 0.85)
-    #expect(shoulderBottomOnly! > 0.85)
 }
 
-@Test func benchPressFlexion3D_supportsSingleArmWithoutTorsoAnchors() {
+@Test func benchPressFlexion3D_supportsSingleArm() {
     let calculator = BenchPressFlexion3DMetricCalculator(
         benchBottomElbowFlexionDegrees: 45,
         benchBottomShoulderFlexionDegrees: 45,
@@ -1783,10 +1771,6 @@ private func feedSquatCounter(
         rightShoulderFlexionDegrees: 10,
         hideRightArm: true
     )
-    lockoutPositions.removeValue(forKey: .leftHip)
-    lockoutPositions.removeValue(forKey: .spine)
-    lockoutPositions.removeValue(forKey: .root)
-
     var bottomPositions = benchPress3DJointPositions(
         leftElbowFlexionDegrees: 48,
         rightElbowFlexionDegrees: 10,
@@ -1794,10 +1778,6 @@ private func feedSquatCounter(
         rightShoulderFlexionDegrees: 10,
         hideRightArm: true
     )
-    bottomPositions.removeValue(forKey: .leftHip)
-    bottomPositions.removeValue(forKey: .spine)
-    bottomPositions.removeValue(forKey: .root)
-
     let lockout = calculator.calculate(from: makeFrame(positions3D: lockoutPositions, seconds: 0.0))
     let bottom = calculator.calculate(from: makeFrame(positions3D: bottomPositions, seconds: 0.1))
 
@@ -1811,7 +1791,7 @@ private func feedSquatCounter(
     }
 }
 
-@Test func benchPressFlexion3D_supportsShoulderFallbackWithoutWristsOrTorsoAnchors() {
+@Test func benchPressFlexion3D_returnsNilWithoutElbowChain() {
     let calculator = BenchPressFlexion3DMetricCalculator(
         benchBottomElbowFlexionDegrees: 45,
         benchBottomShoulderFlexionDegrees: 45,
@@ -1819,43 +1799,15 @@ private func feedSquatCounter(
         benchLockoutShoulderFlexionDegrees: 12
     )
 
-    var lockoutPositions = benchPress3DJointPositions(
+    var positions = benchPress3DJointPositions(
         leftElbowFlexionDegrees: 12,
         rightElbowFlexionDegrees: 12,
         leftShoulderFlexionDegrees: 10,
         rightShoulderFlexionDegrees: 10
     )
-    lockoutPositions.removeValue(forKey: .leftWrist)
-    lockoutPositions.removeValue(forKey: .rightWrist)
-    lockoutPositions.removeValue(forKey: .leftHip)
-    lockoutPositions.removeValue(forKey: .rightHip)
-    lockoutPositions.removeValue(forKey: .spine)
-    lockoutPositions.removeValue(forKey: .root)
-
-    var bottomPositions = benchPress3DJointPositions(
-        leftElbowFlexionDegrees: 12,
-        rightElbowFlexionDegrees: 12,
-        leftShoulderFlexionDegrees: 52,
-        rightShoulderFlexionDegrees: 50
-    )
-    bottomPositions.removeValue(forKey: .leftWrist)
-    bottomPositions.removeValue(forKey: .rightWrist)
-    bottomPositions.removeValue(forKey: .leftHip)
-    bottomPositions.removeValue(forKey: .rightHip)
-    bottomPositions.removeValue(forKey: .spine)
-    bottomPositions.removeValue(forKey: .root)
-
-    let lockout = calculator.calculate(from: makeFrame(positions3D: lockoutPositions, seconds: 0.0))
-    let bottom = calculator.calculate(from: makeFrame(positions3D: bottomPositions, seconds: 0.1))
-
-    #expect(lockout != nil)
-    #expect(bottom != nil)
-    if let lockout {
-        #expect(lockout < 0.20)
-    }
-    if let bottom {
-        #expect(bottom > 0.85)
-    }
+    positions.removeValue(forKey: .leftWrist)
+    positions.removeValue(forKey: .rightWrist)
+    #expect(calculator.calculate(from: makeFrame(positions3D: positions, seconds: 0.0)) == nil)
 }
 
 @Test func benchPressFlexion3D_returnsNilWhenNoAnglesAreAvailable() {
@@ -1868,7 +1820,7 @@ private func feedSquatCounter(
     #expect(calculator.calculate(from: makeFrame(positions3D: positions)) == nil)
 }
 
-@Test func benchPressFlexion3D_prefersElbowWhenShoulderDisagrees() {
+@Test func benchPressFlexion3D_usesElbowWhenShoulderDisagrees() {
     let calculator = BenchPressFlexion3DMetricCalculator(
         benchBottomElbowFlexionDegrees: 45,
         benchBottomShoulderFlexionDegrees: 45,
@@ -1921,14 +1873,14 @@ private func feedSquatCounter(
     }
 }
 
-@Test func benchPressExerciseProfile_usesCycleCounterAndSmoothingFilters() {
+@Test func benchPressExerciseProfile_usesBenchCounterAndSmoothingFilters() {
     let profile = BenchPressExerciseProfile()
     let configuration = RepCountingConfiguration(gates: .init(minTimeBetweenReps: 0.45, minAmplitude: 0.22, upThreshold: 0.20, downThreshold: 0.92))
 
     let counter = profile.makeRepCounter(configuration: configuration)
     let filters = profile.makeMetricFilters(configuration: configuration)
 
-    #expect(counter is CurlPhaseRepCounter)
+    #expect(counter is BenchPressPhaseRepCounter)
     #expect(filters.count == 2)
     #expect(filters.first is SpikeRejectionFilter)
     #expect(filters.last is EMAMetricFilter)
@@ -1991,6 +1943,99 @@ private func feedSquatCounter(
     _ = cancellable
 
     #expect(box.lastRepCount == 2)
+}
+
+@Test func repCounterPublisher_benchShowsReframeStatusWhenVisibilityGateFails() async throws {
+    let config = RepCountingConfiguration(
+        filters: .init(spikeMaxDelta: 1.0, emaAlpha: 1.0),
+        bench: .init(
+            bottomElbowFlexionDegrees: 45,
+            bottomShoulderFlexionDegrees: 45,
+            lockoutElbowFlexionDegrees: 12,
+            lockoutShoulderFlexionDegrees: 12
+        )
+    )
+    let publisher = RepCounterPublisher(configuration: config, exerciseProfile: BenchPressExerciseProfile())
+
+    final class OutputBox: @unchecked Sendable {
+        var latest: RepCounterOutput?
+    }
+    let box = OutputBox()
+    let cancellable = publisher.repCounts.sink { box.latest = $0 }
+
+    var positions = benchPress3DJointPositions(
+        leftElbowFlexionDegrees: 24,
+        rightElbowFlexionDegrees: 24,
+        leftShoulderFlexionDegrees: 14,
+        rightShoulderFlexionDegrees: 14
+    )
+    positions.removeValue(forKey: .leftWrist)
+    positions.removeValue(forKey: .rightWrist)
+
+    publisher.ingest(PoseFrame(
+        timestamp: CMTime(seconds: 0.0, preferredTimescale: 600),
+        joints: [:],
+        positions3D: positions
+    ))
+
+    try await Task.sleep(nanoseconds: 250_000_000)
+    _ = cancellable
+
+    #expect(box.latest?.statusHint == "Reframe: show shoulder/elbow/wrist")
+}
+
+@Test func repCounterPublisher_benchResetsOnSustainedGateLoss() async throws {
+    let config = RepCountingConfiguration(
+        gates: .init(minTimeBetweenReps: 0.4, minAmplitude: 0.20, upThreshold: 0.60, downThreshold: 0.30),
+        filters: .init(spikeMaxDelta: 1.0, emaAlpha: 1.0)
+    )
+    let publisher = RepCounterPublisher(configuration: config, exerciseProfile: BenchPressExerciseProfile())
+
+    final class OutputBox: @unchecked Sendable {
+        var latest: RepCounterOutput?
+    }
+    let box = OutputBox()
+    let cancellable = publisher.repCounts.sink { box.latest = $0 }
+
+    let cycle: [CGFloat] = [10, 16, 26, 40, 48, 42, 30, 20, 12, 10]
+    for (i, flexion) in cycle.enumerated() {
+        publisher.ingest(PoseFrame(
+            timestamp: CMTime(seconds: Double(i) * 0.1, preferredTimescale: 600),
+            joints: [:],
+            positions3D: benchPress3DJointPositions(
+                leftElbowFlexionDegrees: flexion,
+                rightElbowFlexionDegrees: max(10, flexion - 5),
+                leftShoulderFlexionDegrees: 14,
+                rightShoulderFlexionDegrees: 14
+            )
+        ))
+    }
+
+    var noWristPositions = benchPress3DJointPositions(
+        leftElbowFlexionDegrees: 24,
+        rightElbowFlexionDegrees: 24,
+        leftShoulderFlexionDegrees: 14,
+        rightShoulderFlexionDegrees: 14
+    )
+    noWristPositions.removeValue(forKey: .leftWrist)
+    noWristPositions.removeValue(forKey: .rightWrist)
+
+    publisher.ingest(PoseFrame(
+        timestamp: CMTime(seconds: 1.2, preferredTimescale: 600),
+        joints: [:],
+        positions3D: noWristPositions
+    ))
+    publisher.ingest(PoseFrame(
+        timestamp: CMTime(seconds: 1.7, preferredTimescale: 600),
+        joints: [:],
+        positions3D: noWristPositions
+    ))
+
+    try await Task.sleep(nanoseconds: 450_000_000)
+    _ = cancellable
+
+    #expect(box.latest?.repCount == 0)
+    #expect(box.latest?.statusHint == "Reframe: show shoulder/elbow/wrist")
 }
 
 @Test func repCounterPublisher_exposesCurrentCurlFlexionMetrics() async throws {
