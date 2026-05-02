@@ -1,7 +1,8 @@
 import CoreGraphics
 import ImageIO
 import AVFoundation
-import UIKit
+
+#if canImport(UIKit)
 
 public enum FrameTransformPolicy {
     public static func previewMirrored(
@@ -23,7 +24,7 @@ public enum FrameTransformPolicy {
     }
 
     public static func visionOrientation(
-        for interfaceOrientation: UIInterfaceOrientation,
+        for interfaceOrientation: CameraKitInterfaceOrientation,
         mirrored: Bool
     ) -> CGImagePropertyOrientation {
         let base: CGImagePropertyOrientation
@@ -57,7 +58,7 @@ public enum FrameTransformPolicy {
     }
 
     public static func previewRotationAngle(
-        for interfaceOrientation: UIInterfaceOrientation
+        for interfaceOrientation: CameraKitInterfaceOrientation
     ) -> CGFloat {
         switch interfaceOrientation {
         case .portrait:
@@ -73,3 +74,5 @@ public enum FrameTransformPolicy {
         }
     }
 }
+
+#endif
