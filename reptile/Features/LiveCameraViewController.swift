@@ -20,6 +20,7 @@ final class LiveCameraViewController: UIViewController {
     private let statusLabel = UILabel()
     private let exercisePicker = ExerciseNodePickerView()
     private let cameraToggleButton = UIButton(type: .system)
+    private let captureToggleButton = UIButton(type: .system)
     private let overlayView = SkeletonOverlayView()
     private let debugView = DebugOverlayView()
     private let tuningPanel = RepTuningPanelView()
@@ -41,14 +42,6 @@ final class LiveCameraViewController: UIViewController {
         gesture.delegate = self
         return gesture
     }()
-    private lazy var exportMetricsGesture: UITapGestureRecognizer = {
-        let gesture = UITapGestureRecognizer(target: self, action: #selector(exportMetricsLog))
-        gesture.numberOfTapsRequired = 3
-        gesture.numberOfTouchesRequired = 2
-        gesture.cancelsTouchesInView = false
-        gesture.delegate = self
-        return gesture
-    }()
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -60,10 +53,12 @@ final class LiveCameraViewController: UIViewController {
         setupStatusLabel()
         setupExercisePicker()
         setupCameraToggleButton()
+        setupCaptureToggleButton()
         setupDebugView()
         setupTuningPanel()
         view.addGestureRecognizer(debugToggleGesture)
-        view.addGestureRecognizer(exportMetricsGesture)
+
+        metricsCaptureLogger.recoverInterruptedSessionIfNeeded()
 
         let initialExerciseID = loadSavedExerciseID()
         let initialExerciseDefinition = LiveCameraCoordinator.definition(for: initialExerciseID)
@@ -215,6 +210,28 @@ final class LiveCameraViewController: UIViewController {
         view.bringSubviewToFront(cameraToggleButton)
     }
 
+    private func setupCaptureToggleButton() {
+        var config = UIButton.Configuration.filled()
+        config.title = "Start Capture"
+        config.image = UIImage(systemName: "record.circle")
+        config.imagePadding = 6
+        config.cornerStyle = .capsule
+        config.baseBackgroundColor = UIColor.black.withAlphaComponent(0.55)
+        config.baseForegroundColor = .white
+        config.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12)
+        captureToggleButton.configuration = config
+        captureToggleButton.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
+        captureToggleButton.translatesAutoresizingMaskIntoConstraints = false
+        captureToggleButton.addTarget(self, action: #selector(toggleMetricsCapture), for: .touchUpInside)
+        captureToggleButton.isHidden = true
+
+        view.addSubview(captureToggleButton)
+        NSLayoutConstraint.activate([
+            captureToggleButton.topAnchor.constraint(equalTo: cameraToggleButton.bottomAnchor, constant: 8),
+            captureToggleButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+        ])
+    }
+
     private func setupDebugView() {
         debugView.isHidden = true
         debugView.isUserInteractionEnabled = false
@@ -254,6 +271,7 @@ final class LiveCameraViewController: UIViewController {
     @objc private func toggleDebug() {
         debugView.isHidden.toggle()
         tuningPanel.isHidden.toggle()
+        captureToggleButton.isHidden = debugView.isHidden
         lastDebugUpdateTime = 0
     }
 
@@ -263,25 +281,46 @@ final class LiveCameraViewController: UIViewController {
         saveCameraPosition(position)
     }
 
-    @objc private func exportMetricsLog() {
+    @objc private func toggleMetricsCapture() {
         do {
-            let url = try metricsCaptureLogger.exportToTempFile()
-            statusLabel.text = "Metrics exported: \(url.lastPathComponent)"
-            statusLabel.isHidden = false
+            if metricsCaptureLogger.isCapturing {
+                let url = try metricsCaptureLogger.stopCapture(exportReason: "manual")
+                updateCaptureButtonTitle(isCapturing: false)
+                statusLabel.text = "Capture saved: \(url.lastPathComponent)"
 
-            let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-            if let popover = activity.popoverPresentationController {
-                popover.sourceView = statusLabel
-                popover.sourceRect = statusLabel.bounds
+                let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+                if let popover = activity.popoverPresentationController {
+                    popover.sourceView = captureToggleButton
+                    popover.sourceRect = captureToggleButton.bounds
+                }
+                present(activity, animated: true)
+                return
             }
-            present(activity, animated: true)
+
+            let result = try metricsCaptureLogger.startCapture(exercise: selectedExerciseID)
+            updateCaptureButtonTitle(isCapturing: true)
+            statusLabel.text = "Capture started: \(result.url.lastPathComponent)"
+            statusLabel.isHidden = false
         } catch {
-            statusLabel.text = "Metrics export failed"
+            statusLabel.text = "Capture action failed"
             statusLabel.isHidden = false
         }
     }
 
+    private func updateCaptureButtonTitle(isCapturing: Bool) {
+        var config = captureToggleButton.configuration ?? UIButton.Configuration.filled()
+        config.title = isCapturing ? "Stop & Share" : "Start Capture"
+        config.image = UIImage(systemName: isCapturing ? "stop.circle" : "record.circle")
+        captureToggleButton.configuration = config
+    }
+
     private func applyExerciseSelection(_ exerciseID: String, persistSelection: Bool) {
+        if metricsCaptureLogger.isCapturing {
+            statusLabel.text = "Stop capture before switching exercise"
+            statusLabel.isHidden = false
+            return
+        }
+
         guard let exerciseDefinition = LiveCameraCoordinator.definition(for: exerciseID) else { return }
         if selectedExerciseID == exerciseDefinition.id {
             if persistSelection {

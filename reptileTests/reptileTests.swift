@@ -40,9 +40,9 @@ struct ReptileTests {
     @Test func defaultRepTuning_usesExpectedSquatThresholds() {
         let squat = LiveCameraCoordinator.defaultRepTuning(for: "squat")
 
-        #expect(squat.gates.downThreshold == 0.82)
+        #expect(squat.gates.downThreshold == 0.70)
         #expect(squat.squat.descendEntryThreshold == 0.18)
-        #expect(squat.squat.standLockoutThreshold == 0.10)
+        #expect(squat.squat.standLockoutThreshold == 0.12)
         #expect(squat.squat.kneeBottomFlexionDegrees == 72)
         #expect(squat.squat.hipBottomFlexionDegrees == 52)
     }
