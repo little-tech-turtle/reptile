@@ -2,7 +2,8 @@ import AVFoundation
 import Combine
 import Foundation
 import ImageIO
-import UIKit
+
+#if canImport(UIKit)
 
 public enum CameraSessionError: Error, Sendable {
     case permissionDenied
@@ -24,7 +25,7 @@ public final class CameraSession: NSObject {
 
     private let sessionQueue = DispatchQueue(label: "camerakit.session.queue")
 
-    public var interfaceOrientation: UIInterfaceOrientation = .portrait
+    public var interfaceOrientation: CameraKitInterfaceOrientation = .portrait
     public var mirrorVisionInput: Bool = false
     public var cameraPosition: AVCaptureDevice.Position = .front
 
@@ -198,7 +199,7 @@ public final class CameraSession: NSObject {
         session.addInput(newInput)
     }
 
-    public func setInterfaceOrientation(_ io: UIInterfaceOrientation) {
+    public func setInterfaceOrientation(_ io: CameraKitInterfaceOrientation) {
         sessionQueue.async { [weak self] in
             self?.interfaceOrientation = io
         }
@@ -249,3 +250,5 @@ extension CameraSession: AVCaptureVideoDataOutputSampleBufferDelegate {
         frameSubject.send(frame)
     }
 }
+
+#endif

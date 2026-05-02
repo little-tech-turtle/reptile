@@ -1,4 +1,6 @@
 import AVFoundation
+
+#if canImport(UIKit)
 import UIKit
 
 public final class CameraPreviewView: UIView {
@@ -16,3 +18,5 @@ public final class CameraPreviewView: UIView {
     }
 
 }
+
+#endif

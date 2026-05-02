@@ -695,6 +695,23 @@ private func time(_ seconds: Double) -> CMTime {
     #expect(result == 0.99)
 }
 
+@Test func spikeFilter_resyncsAfterThreeSameDirectionRejects() {
+    var filter = SpikeRejectionFilter(maxDelta: 0.25, consecutiveRejectsBeforeResync: 3)
+    _ = filter.filter(0.9)
+    #expect(filter.filter(0.1) == 0.9)
+    #expect(filter.filter(0.1) == 0.9)
+    #expect(filter.filter(0.1) == 0.1)
+}
+
+@Test func spikeFilter_doesNotResyncOnAlternatingDirections() {
+    var filter = SpikeRejectionFilter(maxDelta: 0.25, consecutiveRejectsBeforeResync: 3)
+    _ = filter.filter(0.5)
+    #expect(filter.filter(0.0) == 0.5)
+    #expect(filter.filter(1.0) == 0.5)
+    #expect(filter.filter(0.0) == 0.5)
+    #expect(filter.filter(1.0) == 0.5)
+}
+
 // MARK: - EMAMetricFilter
 
 @Test func emaFilter_firstSamplePassesThrough() {
@@ -2053,6 +2070,67 @@ private func feedSquatCounter(
 
     #expect(box.latest?.repCount == 0)
     #expect(box.latest?.statusHint == "Reframe: show shoulder/elbow/wrist")
+}
+
+@Test func repCounterPublisher_spikeFilterRecoversFromStuckHighAfterConsecutiveRejects() async throws {
+    final class ScriptedMetricCalculator: MetricCalculator {
+        private var values: [CGFloat]
+        private var index = 0
+
+        init(values: [CGFloat]) {
+            self.values = values
+        }
+
+        func calculate(from frame: PoseFrame) -> CGFloat? {
+            guard !values.isEmpty else { return nil }
+            let value = values[min(index, values.count - 1)]
+            index += 1
+            return value
+        }
+    }
+
+    let scriptedValues: [CGFloat] = [0.90, 0.10, 0.10, 0.10, 0.10, 0.10]
+    let publisher = RepCounterPublisher(
+        metricCalculator: ScriptedMetricCalculator(values: scriptedValues),
+        peakDetector: LocalExtremaPeakDetector(windowSize: 5),
+        repCounter: CycleBasedRepCounter(),
+        metricFilters: [SpikeRejectionFilter(maxDelta: 0.25, consecutiveRejectsBeforeResync: 3)],
+        armingThreshold: 0.2,
+        exerciseProfileID: "squat",
+        metricCalculatorFactory: { _ in ScriptedMetricCalculator(values: scriptedValues) },
+        peakDetectorFactory: { _ in LocalExtremaPeakDetector(windowSize: 5) },
+        repCounterFactory: { _ in CycleBasedRepCounter() },
+        metricFilterFactory: { _ in [SpikeRejectionFilter(maxDelta: 0.25, consecutiveRejectsBeforeResync: 3)] },
+        enableSquatStrategy: true
+    )
+
+    final class OutputBox: @unchecked Sendable {
+        var metrics: [CGFloat] = []
+    }
+    let box = OutputBox()
+    let cancellable = publisher.repCounts.sink {
+        if let metric = $0.currentMetric {
+            box.metrics.append(metric)
+        }
+    }
+
+    for i in 0..<scriptedValues.count {
+        publisher.ingest(PoseFrame(
+            timestamp: CMTime(seconds: Double(i) * 0.1, preferredTimescale: 600),
+            joints: [:],
+            positions3D: [:],
+            diagnostics: .empty
+        ))
+    }
+
+    try await Task.sleep(nanoseconds: 250_000_000)
+    _ = cancellable
+
+    #expect(box.metrics.count >= 4)
+    #expect(abs(box.metrics[0] - 0.90) < 0.0001)
+    #expect(abs(box.metrics[1] - 0.90) < 0.0001)
+    #expect(abs(box.metrics[2] - 0.90) < 0.0001)
+    #expect(abs(box.metrics[3] - 0.10) < 0.0001)
 }
 
 @Test func repCounterPublisher_exposesCurrentCurlFlexionMetrics() async throws {

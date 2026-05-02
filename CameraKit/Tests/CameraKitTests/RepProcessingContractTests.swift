@@ -158,3 +158,50 @@ private func snapshot(_ output: RepCounterOutput) -> ContractSnapshot {
         #expect(l.diagnosticsLabels == r.diagnosticsLabels)
     }
 }
+
+@Test func squat_ndjsonReplayStyleSequence_doesNotStickHighNearLockout() async throws {
+    let publisher = RepCounterPublisher(
+        configuration: .squatDefault,
+        exerciseProfile: SquatExerciseProfile()
+    )
+
+    final class OutputBox: @unchecked Sendable {
+        var metrics: [CGFloat?] = []
+    }
+    let box = OutputBox()
+    let cancellable = publisher.repCounts.sink {
+        box.metrics.append($0.currentMetric)
+    }
+
+    let replayLikeAngles: [(knee: CGFloat, hip: CGFloat)] = [
+        (62, 58), (68, 64), (74, 71), (81, 77), (87, 82), (95, 88),
+        (101, 93), (105, 97), (107, 100), (102, 96), (92, 86), (80, 76),
+        (66, 65), (52, 54), (42, 45), (34, 35), (29, 26), (26, 19),
+        (22, 15), (19, 12), (16, 10), (14, 9), (13, 8), (12, 8),
+        (11, 8), (10, 8), (10, 8), (11, 8), (12, 8), (14, 7), (16, 10),
+    ]
+
+    for (idx, sample) in replayLikeAngles.enumerated() {
+        let frame = makeFrame(
+            positions3D: squat3DJointFlexionPositions(
+                kneeFlexionDegrees: sample.knee,
+                hipFlexionDegrees: sample.hip
+            ),
+            seconds: Double(idx) * 0.1
+        )
+        publisher.ingest(frame)
+    }
+
+    try await Task.sleep(nanoseconds: 350_000_000)
+    _ = cancellable
+
+    guard let firstLowIndex = replayLikeAngles.firstIndex(where: { $0.knee < 20 && $0.hip < 20 }) else {
+        Issue.record("Replay-like sequence missing low-flexion lockout segment")
+        return
+    }
+
+    #expect(box.metrics.count >= replayLikeAngles.count)
+    let tail = Array(box.metrics.dropFirst(firstLowIndex).prefix(10))
+    #expect(!tail.isEmpty)
+    #expect(tail.compactMap { $0 }.contains { $0 < 0.25 })
+}

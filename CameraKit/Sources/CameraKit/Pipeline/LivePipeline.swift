@@ -1,7 +1,8 @@
 import AVFoundation
 import Combine
 import Foundation
-import UIKit
+
+#if canImport(UIKit)
 
 public enum LivePipelineState: Sendable {
     case idle
@@ -60,7 +61,7 @@ public final class LivePipeline {
         repCounter.reset()
     }
 
-    public func setInterfaceOrientation(_ orientation: UIInterfaceOrientation) {
+    public func setInterfaceOrientation(_ orientation: CameraKitInterfaceOrientation) {
         cameraSession.setInterfaceOrientation(orientation)
     }
 
@@ -126,3 +127,5 @@ public final class LivePipeline {
         }
     }
 }
+
+#endif

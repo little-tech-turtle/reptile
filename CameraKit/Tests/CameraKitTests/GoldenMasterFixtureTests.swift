@@ -67,9 +67,11 @@ struct GoldenMasterFixtureTests {
                 #expect(frame.sessionID == start.sessionID)
                 #expect(frame.exercise == start.exercise)
 
-                for key in frame.diagnostics?.keys ?? [] {
-                    if !knownDiagnosticKeys.contains(key) {
-                        unknownDiagnostics.insert(key)
+                if let diagnostics = frame.diagnostics {
+                    for key in diagnostics.keys {
+                        if !knownDiagnosticKeys.contains(key) {
+                            unknownDiagnostics.insert(key)
+                        }
                     }
                 }
             }
